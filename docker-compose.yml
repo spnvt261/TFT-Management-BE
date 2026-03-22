@@ -8,16 +8,32 @@ services:
     environment:
       POSTGRES_USER: "${DB_USER:-postgres}"
       POSTGRES_PASSWORD: "${DB_PASSWORD:-postgres}"
-      # Keep admin database available for bootstrap flow in the app.
-      POSTGRES_DB: "${DB_ADMIN_DATABASE:-postgres}"
+      POSTGRES_DB: "${DB_NAME:-tft_history}"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_ADMIN_DATABASE:-postgres}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-tft_history}"]
       interval: 5s
       timeout: 3s
       retries: 20
       start_period: 10s
+
+  flyway:
+    image: flyway/flyway:11
+    container_name: tft2_flyway
+    depends_on:
+      db:
+        condition: service_healthy
+    command:
+      - -connectRetries=30
+      - -url=jdbc:postgresql://db:5432/${DB_NAME:-tft_history}
+      - -user=${DB_USER:-postgres}
+      - -password=${DB_PASSWORD:-postgres}
+      - -locations=filesystem:/flyway/sql
+      - migrate
+    volumes:
+      - ./apps/api/db/migrations:/flyway/sql:ro
+    restart: "no"
 
 volumes:
   postgres_data:

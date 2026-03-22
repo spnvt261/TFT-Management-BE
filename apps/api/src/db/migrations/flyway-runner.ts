@@ -13,8 +13,31 @@ export interface FlywayRunOptions {
   cwd?: string;
 }
 
+async function isCommandAvailable(command: string, cwd?: string): Promise<boolean> {
+  return await new Promise<boolean>((resolvePromise) => {
+    const child = spawn(command, ["-v"], {
+      cwd,
+      stdio: "ignore",
+      shell: process.platform === "win32"
+    });
+
+    child.once("error", () => resolvePromise(false));
+    child.once("close", (code) => resolvePromise(code === 0));
+  });
+}
+
 export async function runFlywayMigrations(options: FlywayRunOptions): Promise<void> {
   if (!options.enabled) {
+    return;
+  }
+
+  const hasFlyway = await isCommandAvailable(options.command, options.cwd);
+  if (!hasFlyway) {
+    // Keep local/dev startup unblocked on machines without Flyway CLI installed.
+    process.stderr.write(
+      `[startup] Flyway command "${options.command}" is not available. ` +
+        "Skipping migration stage. Set FLYWAY_ENABLED=false to silence this warning.\n"
+    );
     return;
   }
 

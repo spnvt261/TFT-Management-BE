@@ -5,6 +5,8 @@ import { runFlywayMigrations } from "./db/migrations/flyway-runner.js";
 import { createPgPool } from "./db/postgres/pool.js";
 import { buildServices } from "./core/types/container.js";
 import { createApp } from "./app.js";
+import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
 export async function bootstrapAndStart(): Promise<void> {
   logger.info("Startup stage 1/3: ensuring target database exists");
@@ -56,7 +58,15 @@ export async function bootstrapAndStart(): Promise<void> {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+const currentModulePath = resolve(fileURLToPath(import.meta.url));
+const invokedModulePath = process.argv[1] !== undefined ? resolve(process.argv[1]) : undefined;
+const isEntrypoint =
+  invokedModulePath !== undefined &&
+  (process.platform === "win32"
+    ? currentModulePath.toLowerCase() === invokedModulePath.toLowerCase()
+    : currentModulePath === invokedModulePath);
+
+if (isEntrypoint) {
   bootstrapAndStart().catch((error) => {
     logger.error(error, "Startup failed before HTTP server could start");
     process.exit(1);

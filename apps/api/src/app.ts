@@ -1,4 +1,6 @@
 import Fastify from "fastify";
+import swagger from "@fastify/swagger";
+import swaggerUi from "@fastify/swagger-ui";
 import type { AppServices } from "./core/types/container.js";
 import { env } from "./core/config/env.js";
 import { registerErrorHandler } from "./core/errors/error-handler.js";
@@ -18,6 +20,19 @@ export async function createApp(services: AppServices) {
   });
 
   registerErrorHandler(app);
+  await app.register(swagger, {
+    openapi: {
+      info: {
+        title: "TFT History API",
+        description: "Backend API for TFT History Manager",
+        version: "0.1.0"
+      }
+    }
+  });
+
+  await app.register(swaggerUi, {
+    routePrefix: "/docs"
+  });
 
   app.get("/", async () => ({
     success: true,

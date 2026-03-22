@@ -10,13 +10,13 @@ The service starts in deterministic stages:
 2. Run Flyway migrations
 3. Start HTTP server
 
-If stage 1 or 2 fails, HTTP does not start.
+If stage 1 fails, HTTP does not start.
 
 ## Requirements
 
 - Node.js 20+
 - PostgreSQL 14+
-- Flyway CLI available in PATH (or set `FLYWAY_COMMAND`)
+- Flyway CLI available in PATH (or set `FLYWAY_COMMAND`) when running migrations from backend process
 
 ## Environment
 
@@ -25,7 +25,7 @@ Copy root `.env.example` to `.env` and adjust values.
 Important variables:
 
 - `DB_BOOTSTRAP_ENABLED=true|false`
-- `FLYWAY_ENABLED=true|false`
+- `FLYWAY_ENABLED=true|false` (set `false` if Docker Compose Flyway service handles migrations)
 - `FLYWAY_COMMAND=flyway`
 - `FLYWAY_LOCATIONS=filesystem:<absolute-path>` (optional)
 
@@ -34,6 +34,7 @@ Important variables:
 From repository root:
 
 - `npm install --prefix apps/api`
+- `pnpm run db:up` (start DB + run Flyway migrations + seed data in Docker)
 - `npm run dev`
 - `npm run build`
 - `npm run start`
@@ -69,3 +70,8 @@ After first startup:
    - 4-player Match Stakes
    - 3-player Group Fund
 6. `POST /api/v1/matches/:matchId/void` marks match voided and creates reversal ledger batch.
+
+## API Docs
+
+- Swagger UI: `GET /docs`
+- OpenAPI JSON: `GET /docs/json`
