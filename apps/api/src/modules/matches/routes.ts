@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { uuidSchema } from "../../core/validation/uuid.js";
 import { ok } from "../../core/types/api.js";
 import type { AppServices } from "../../core/types/container.js";
 import { matchStatusSchema, moduleTypeSchema } from "../../domain/models/enums.js";
@@ -7,13 +8,13 @@ import { errorResponseSchemas, paginationMetaSchema, successResponseSchema, toSw
 
 const createMatchSchema = z.object({
   module: moduleTypeSchema,
-  ruleSetId: z.string().uuid(),
-  ruleSetVersionId: z.string().uuid().optional(),
+  ruleSetId: uuidSchema,
+  ruleSetVersionId: uuidSchema.optional(),
   note: z.string().max(4000).nullable().optional(),
   participants: z
     .array(
       z.object({
-        playerId: z.string().uuid(),
+        playerId: uuidSchema,
         tftPlacement: z.number().int()
       })
     )
@@ -24,8 +25,8 @@ const createMatchSchema = z.object({
 const listMatchesQuerySchema = z.object({
   module: moduleTypeSchema.optional(),
   status: matchStatusSchema.optional(),
-  playerId: z.string().uuid().optional(),
-  ruleSetId: z.string().uuid().optional(),
+  playerId: uuidSchema.optional(),
+  ruleSetId: uuidSchema.optional(),
   from: z.string().datetime().optional(),
   to: z.string().datetime().optional(),
   page: z.coerce.number().int().positive().default(1),
@@ -36,10 +37,10 @@ const voidMatchSchema = z.object({
   reason: z.string().min(3).max(500)
 });
 
-const matchIdParamSchema = z.object({ matchId: z.string().uuid() });
+const matchIdParamSchema = z.object({ matchId: uuidSchema });
 
 const matchParticipantResponseSchema = z.object({
-  playerId: z.string().uuid(),
+  playerId: uuidSchema,
   playerName: z.string(),
   tftPlacement: z.number().int(),
   relativeRank: z.number().int(),
@@ -48,16 +49,16 @@ const matchParticipantResponseSchema = z.object({
 });
 
 const settlementLineResponseSchema = z.object({
-  id: z.string().uuid(),
+  id: uuidSchema,
   lineNo: z.number().int().positive(),
-  ruleId: z.string().uuid().nullable(),
+  ruleId: uuidSchema.nullable(),
   ruleCode: z.string(),
   ruleName: z.string(),
-  sourceAccountId: z.string().uuid(),
-  destinationAccountId: z.string().uuid(),
-  sourcePlayerId: z.string().uuid().nullable(),
+  sourceAccountId: uuidSchema,
+  destinationAccountId: uuidSchema,
+  sourcePlayerId: uuidSchema.nullable(),
   sourcePlayerName: z.string().nullable(),
-  destinationPlayerId: z.string().uuid().nullable(),
+  destinationPlayerId: uuidSchema.nullable(),
   destinationPlayerName: z.string().nullable(),
   amountVnd: z.number().int(),
   reasonText: z.string(),
@@ -65,7 +66,7 @@ const settlementLineResponseSchema = z.object({
 });
 
 const settlementResponseSchema = z.object({
-  id: z.string().uuid(),
+  id: uuidSchema,
   totalTransferVnd: z.number().int(),
   totalFundInVnd: z.number().int(),
   totalFundOutVnd: z.number().int(),
@@ -77,13 +78,13 @@ const settlementResponseSchema = z.object({
 });
 
 const matchListItemResponseSchema = z.object({
-  id: z.string().uuid(),
+  id: uuidSchema,
   module: moduleTypeSchema,
   playedAt: z.string(),
   participantCount: z.number().int(),
-  ruleSetId: z.string().uuid(),
+  ruleSetId: uuidSchema,
   ruleSetName: z.string(),
-  ruleSetVersionId: z.string().uuid(),
+  ruleSetVersionId: uuidSchema,
   ruleSetVersionNo: z.number().int().positive(),
   notePreview: z.string().nullable(),
   status: z.string(),
@@ -95,20 +96,20 @@ const matchListItemResponseSchema = z.object({
 });
 
 const matchDetailResponseSchema = z.object({
-  id: z.string().uuid(),
+  id: uuidSchema,
   module: moduleTypeSchema,
   playedAt: z.string(),
   participantCount: z.number().int(),
   status: z.string(),
   note: z.string().nullable(),
   ruleSet: z.object({
-    id: z.string().uuid(),
+    id: uuidSchema,
     name: z.string(),
     module: moduleTypeSchema
   }),
   ruleSetVersion: z
     .object({
-      id: z.string().uuid(),
+      id: uuidSchema,
       versionNo: z.number().int().positive(),
       participantCountMin: z.number().int(),
       participantCountMax: z.number().int(),
@@ -125,7 +126,7 @@ const matchDetailResponseSchema = z.object({
 });
 
 const createMatchResponseSchema = z.object({
-  id: z.string().uuid(),
+  id: uuidSchema,
   module: moduleTypeSchema,
   playedAt: z.string(),
   participantCount: z.number().int(),
@@ -133,14 +134,14 @@ const createMatchResponseSchema = z.object({
   note: z.string().nullable().optional(),
   ruleSet: z
     .object({
-      id: z.string().uuid(),
+      id: uuidSchema,
       name: z.string(),
       module: moduleTypeSchema
     })
     .optional(),
   ruleSetVersion: z
     .object({
-      id: z.string().uuid(),
+      id: uuidSchema,
       versionNo: z.number().int().positive(),
       participantCountMin: z.number().int(),
       participantCountMax: z.number().int(),
@@ -158,7 +159,7 @@ const createMatchResponseSchema = z.object({
 });
 
 const voidMatchResponseSchema = z.object({
-  id: z.string().uuid(),
+  id: uuidSchema,
   status: z.literal("VOIDED"),
   reason: z.string(),
   voidedAt: z.string()

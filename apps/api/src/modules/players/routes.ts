@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { uuidSchema } from "../../core/validation/uuid.js";
 import { ok } from "../../core/types/api.js";
 import type { AppServices } from "../../core/types/container.js";
 import { errorResponseSchemas, paginationMetaSchema, successResponseSchema, toSwaggerSchema } from "../../core/docs/swagger.js";
@@ -29,10 +30,10 @@ const updateSchema = z
     message: "At least one field must be provided"
   });
 
-const playerIdParamSchema = z.object({ playerId: z.string().uuid() });
+const playerIdParamSchema = z.object({ playerId: uuidSchema });
 
 const playerResponseSchema = z.object({
-  id: z.string().uuid(),
+  id: uuidSchema,
   displayName: z.string(),
   slug: z.string().nullable(),
   avatarUrl: z.string().nullable(),
@@ -42,7 +43,7 @@ const playerResponseSchema = z.object({
 });
 
 const playerDeleteResponseSchema = z.object({
-  id: z.string().uuid(),
+  id: uuidSchema,
   isActive: z.boolean()
 });
 

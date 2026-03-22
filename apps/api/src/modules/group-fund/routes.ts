@@ -1,11 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { uuidSchema } from "../../core/validation/uuid.js";
 import { ok } from "../../core/types/api.js";
 import type { AppServices } from "../../core/types/container.js";
 import { errorResponseSchemas, paginationMetaSchema, successResponseSchema, toSwaggerSchema } from "../../core/docs/swagger.js";
 
 const querySchema = z.object({
-  playerId: z.string().uuid().optional(),
+  playerId: uuidSchema.optional(),
   from: z.string().datetime().optional(),
   to: z.string().datetime().optional(),
   page: z.coerce.number().int().positive().default(1),
@@ -18,7 +19,7 @@ const groupFundTransactionTypeSchema = z.enum(["CONTRIBUTION", "WITHDRAWAL", "AD
 const createGroupFundTransactionSchema = z
   .object({
     transactionType: groupFundTransactionTypeSchema,
-    playerId: z.string().uuid().nullable().optional(),
+    playerId: uuidSchema.nullable().optional(),
     amountVnd: z.coerce.number().int().positive(),
     reason: z.string().min(3).max(500),
     postedAt: z.string().datetime().optional()
@@ -44,7 +45,7 @@ const createGroupFundTransactionSchema = z
 
 const listGroupFundTransactionsQuerySchema = z.object({
   transactionType: groupFundTransactionTypeSchema.optional(),
-  playerId: z.string().uuid().optional(),
+  playerId: uuidSchema.optional(),
   from: z.string().datetime().optional(),
   to: z.string().datetime().optional(),
   page: z.coerce.number().int().positive().default(1),
@@ -57,7 +58,7 @@ const groupFundSummarySchema = z.object({
   totalMatches: z.number().int().nonnegative(),
   players: z.array(
     z.object({
-      playerId: z.string().uuid(),
+      playerId: uuidSchema,
       playerName: z.string(),
       totalContributedVnd: z.number().int(),
       currentObligationVnd: z.number().int()
@@ -70,10 +71,10 @@ const groupFundSummarySchema = z.object({
 });
 
 const moduleLedgerItemSchema = z.object({
-  entryId: z.string().uuid(),
+  entryId: uuidSchema,
   postedAt: z.string(),
-  matchId: z.string().uuid().nullable(),
-  relatedPlayerId: z.string().uuid().nullable(),
+  matchId: uuidSchema.nullable(),
+  relatedPlayerId: uuidSchema.nullable(),
   relatedPlayerName: z.string().nullable(),
   amountVnd: z.number().int(),
   movementType: z.enum(["FUND_IN", "FUND_OUT"]),
@@ -83,7 +84,7 @@ const moduleLedgerItemSchema = z.object({
 });
 
 const matchParticipantResponseSchema = z.object({
-  playerId: z.string().uuid(),
+  playerId: uuidSchema,
   playerName: z.string(),
   tftPlacement: z.number().int(),
   relativeRank: z.number().int(),
@@ -91,13 +92,13 @@ const matchParticipantResponseSchema = z.object({
 });
 
 const moduleMatchHistoryItemSchema = z.object({
-  id: z.string().uuid(),
+  id: uuidSchema,
   module: z.literal("GROUP_FUND"),
   playedAt: z.string(),
   participantCount: z.number().int(),
-  ruleSetId: z.string().uuid(),
+  ruleSetId: uuidSchema,
   ruleSetName: z.string(),
-  ruleSetVersionId: z.string().uuid(),
+  ruleSetVersionId: uuidSchema,
   ruleSetVersionNo: z.number().int().positive(),
   notePreview: z.string().nullable(),
   status: z.string(),
@@ -109,12 +110,12 @@ const moduleMatchHistoryItemSchema = z.object({
 });
 
 const groupFundTransactionResponseSchema = z.object({
-  entryId: z.string().uuid().optional(),
-  batchId: z.string().uuid(),
+  entryId: uuidSchema.optional(),
+  batchId: uuidSchema,
   postedAt: z.string(),
   sourceType: z.enum(["MANUAL_ADJUSTMENT", "SYSTEM_CORRECTION"]),
   transactionType: groupFundTransactionTypeSchema,
-  playerId: z.string().uuid().nullable(),
+  playerId: uuidSchema.nullable(),
   playerName: z.string().nullable(),
   amountVnd: z.number().int(),
   reason: z.string()
@@ -248,7 +249,7 @@ export async function registerGroupFundRoutes(app: FastifyInstance, services: Ap
         summary: "List group-fund match history",
         querystring: toSwaggerSchema(
           querySchema.extend({
-            ruleSetId: z.string().uuid().optional()
+            ruleSetId: uuidSchema.optional()
           })
         ),
         response: {
@@ -260,7 +261,7 @@ export async function registerGroupFundRoutes(app: FastifyInstance, services: Ap
     async (request) => {
       const query = querySchema
         .extend({
-          ruleSetId: z.string().uuid().optional()
+          ruleSetId: uuidSchema.optional()
         })
         .parse(request.query);
 

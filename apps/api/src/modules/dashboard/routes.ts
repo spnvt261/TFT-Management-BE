@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { uuidSchema } from "../../core/validation/uuid.js";
 import { ok } from "../../core/types/api.js";
 import type { AppServices } from "../../core/types/container.js";
 import { errorResponseSchemas, successResponseSchema } from "../../core/docs/swagger.js";
@@ -11,7 +12,7 @@ const dashboardOverviewResponseSchema = z.object({
     totalMatches: z.number().int().nonnegative(),
     topPlayers: z.array(
       z.object({
-        playerId: z.string().uuid(),
+        playerId: uuidSchema,
         playerName: z.string(),
         totalNetVnd: z.number().int()
       })
@@ -22,7 +23,7 @@ const dashboardOverviewResponseSchema = z.object({
     fundBalanceVnd: z.number().int(),
     topContributors: z.array(
       z.object({
-        playerId: z.string().uuid(),
+        playerId: uuidSchema,
         playerName: z.string(),
         totalContributedVnd: z.number().int()
       })
@@ -30,19 +31,19 @@ const dashboardOverviewResponseSchema = z.object({
   }),
   recentMatches: z.array(
     z.object({
-      id: z.string().uuid(),
+      id: uuidSchema,
       module: z.enum(["MATCH_STAKES", "GROUP_FUND"]),
       playedAt: z.string(),
       participantCount: z.number().int(),
-      ruleSetId: z.string().uuid(),
+      ruleSetId: uuidSchema,
       ruleSetName: z.string(),
-      ruleSetVersionId: z.string().uuid(),
+      ruleSetVersionId: uuidSchema,
       ruleSetVersionNo: z.number().int().positive(),
       notePreview: z.string().nullable(),
       status: z.string(),
       participants: z.array(
         z.object({
-          playerId: z.string().uuid(),
+          playerId: uuidSchema,
           playerName: z.string(),
           tftPlacement: z.number().int(),
           relativeRank: z.number().int(),

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { uuidSchema } from "../../core/validation/uuid.js";
 import { ok } from "../../core/types/api.js";
 import type { AppServices } from "../../core/types/container.js";
 import { moduleTypeSchema, ruleStatusSchema, ruleKindSchema, conditionOperatorSchema, actionTypeSchema, selectorTypeSchema } from "../../domain/models/enums.js";
@@ -79,15 +80,15 @@ const updateRuleSetVersionSchema = z
   })
   .refine((value) => Object.keys(value).length > 0, { message: "At least one field must be provided" });
 
-const ruleSetIdParamSchema = z.object({ ruleSetId: z.string().uuid() });
-const ruleSetVersionParamSchema = z.object({ ruleSetId: z.string().uuid(), versionId: z.string().uuid() });
+const ruleSetIdParamSchema = z.object({ ruleSetId: uuidSchema });
+const ruleSetVersionParamSchema = z.object({ ruleSetId: uuidSchema, versionId: uuidSchema });
 const moduleParamSchema = z.object({ module: moduleTypeSchema });
 const defaultByModuleQuerySchema = z.object({
   participantCount: z.coerce.number().int().pipe(z.union([z.literal(3), z.literal(4)])).optional()
 });
 
 const ruleConditionResponseSchema = z.object({
-  id: z.string().uuid().optional(),
+  id: uuidSchema.optional(),
   conditionKey: z.string(),
   operator: z.string(),
   valueJson: z.unknown(),
@@ -95,7 +96,7 @@ const ruleConditionResponseSchema = z.object({
 });
 
 const ruleActionResponseSchema = z.object({
-  id: z.string().uuid().optional(),
+  id: uuidSchema.optional(),
   actionType: z.string(),
   amountVnd: z.number().int(),
   sourceSelectorType: z.string(),
@@ -107,7 +108,7 @@ const ruleActionResponseSchema = z.object({
 });
 
 const ruleResponseSchema = z.object({
-  id: z.string().uuid().optional(),
+  id: uuidSchema.optional(),
   code: z.string(),
   name: z.string(),
   description: z.string().nullable(),
@@ -121,8 +122,8 @@ const ruleResponseSchema = z.object({
 });
 
 const ruleSetVersionResponseSchema = z.object({
-  id: z.string().uuid(),
-  ruleSetId: z.string().uuid(),
+  id: uuidSchema,
+  ruleSetId: uuidSchema,
   versionNo: z.number().int().positive(),
   participantCountMin: z.number().int(),
   participantCountMax: z.number().int(),
@@ -135,7 +136,7 @@ const ruleSetVersionResponseSchema = z.object({
 });
 
 const ruleSetResponseSchema = z.object({
-  id: z.string().uuid(),
+  id: uuidSchema,
   module: moduleTypeSchema,
   code: z.string(),
   name: z.string(),

@@ -1,11 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { uuidSchema } from "../../core/validation/uuid.js";
 import { ok } from "../../core/types/api.js";
 import type { AppServices } from "../../core/types/container.js";
 import { errorResponseSchemas, paginationMetaSchema, successResponseSchema, toSwaggerSchema } from "../../core/docs/swagger.js";
 
 const querySchema = z.object({
-  playerId: z.string().uuid().optional(),
+  playerId: uuidSchema.optional(),
   from: z.string().datetime().optional(),
   to: z.string().datetime().optional(),
   page: z.coerce.number().int().positive().default(1),
@@ -18,7 +19,7 @@ const matchStakesSummarySchema = z.object({
   module: z.literal("MATCH_STAKES"),
   players: z.array(
     z.object({
-      playerId: z.string().uuid(),
+      playerId: uuidSchema,
       playerName: z.string(),
       totalNetVnd: z.number().int(),
       totalMatches: z.number().int().nonnegative(),
@@ -35,12 +36,12 @@ const matchStakesSummarySchema = z.object({
 });
 
 const moduleLedgerItemSchema = z.object({
-  entryId: z.string().uuid(),
+  entryId: uuidSchema,
   postedAt: z.string(),
-  matchId: z.string().uuid().nullable(),
-  sourcePlayerId: z.string().uuid().nullable(),
+  matchId: uuidSchema.nullable(),
+  sourcePlayerId: uuidSchema.nullable(),
   sourcePlayerName: z.string().nullable(),
-  destinationPlayerId: z.string().uuid().nullable(),
+  destinationPlayerId: uuidSchema.nullable(),
   destinationPlayerName: z.string().nullable(),
   amountVnd: z.number().int(),
   entryReason: z.string(),
@@ -49,7 +50,7 @@ const moduleLedgerItemSchema = z.object({
 });
 
 const matchParticipantResponseSchema = z.object({
-  playerId: z.string().uuid(),
+  playerId: uuidSchema,
   playerName: z.string(),
   tftPlacement: z.number().int(),
   relativeRank: z.number().int(),
@@ -57,13 +58,13 @@ const matchParticipantResponseSchema = z.object({
 });
 
 const moduleMatchHistoryItemSchema = z.object({
-  id: z.string().uuid(),
+  id: uuidSchema,
   module: z.literal("MATCH_STAKES"),
   playedAt: z.string(),
   participantCount: z.number().int(),
-  ruleSetId: z.string().uuid(),
+  ruleSetId: uuidSchema,
   ruleSetName: z.string(),
-  ruleSetVersionId: z.string().uuid(),
+  ruleSetVersionId: uuidSchema,
   ruleSetVersionNo: z.number().int().positive(),
   notePreview: z.string().nullable(),
   status: z.string(),
@@ -141,7 +142,7 @@ export async function registerMatchStakesRoutes(app: FastifyInstance, services: 
         summary: "List match-stakes match history",
         querystring: toSwaggerSchema(
           querySchema.extend({
-            ruleSetId: z.string().uuid().optional()
+            ruleSetId: uuidSchema.optional()
           })
         ),
         response: {
@@ -153,7 +154,7 @@ export async function registerMatchStakesRoutes(app: FastifyInstance, services: 
     async (request) => {
       const query = querySchema
         .extend({
-          ruleSetId: z.string().uuid().optional()
+          ruleSetId: uuidSchema.optional()
         })
         .parse(request.query);
 
