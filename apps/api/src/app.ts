@@ -11,6 +11,7 @@ import { registerMatchRoutes } from "./modules/matches/routes.js";
 import { registerPresetRoutes } from "./modules/presets/routes.js";
 import { registerMatchStakesRoutes } from "./modules/match-stakes/routes.js";
 import { registerGroupFundRoutes } from "./modules/group-fund/routes.js";
+import { openApiTags } from "./core/docs/swagger.js";
 
 export async function createApp(services: AppServices) {
   const app = Fastify({
@@ -26,7 +27,8 @@ export async function createApp(services: AppServices) {
         title: "TFT History API",
         description: "Backend API for TFT History Manager",
         version: "0.1.0"
-      }
+      },
+      tags: openApiTags
     }
   });
 
