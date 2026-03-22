@@ -802,6 +802,19 @@ interface GetDefaultRuleSetByModuleResponse {
 }
 ```
 
+### Query params
+
+```ts
+interface GetDefaultRuleSetByModuleQuery {
+  participantCount?: 3 | 4;
+}
+```
+
+### Notes
+- always returns default active rule set for the module
+- if `participantCount` is provided, backend resolves active version for that participant count and current time
+- if `participantCount` is omitted, backend returns `activeVersion = null`
+
 ---
 
 ## 9) MATCH APIs
@@ -1430,6 +1443,8 @@ interface DashboardOverviewResponse {
 
 ## 14.6. Group Fund Screen
 
+- `POST /group-fund/transactions`
+- `GET /group-fund/transactions`
 - `GET /group-fund/summary`
 - `GET /group-fund/ledger`
 - `GET /group-fund/matches`
@@ -1515,13 +1530,15 @@ Vì bạn đang tập trung code Node.js trước, nên triển khai API theo th
 15. `GET /match-stakes/summary`
 16. `GET /match-stakes/ledger`
 17. `GET /match-stakes/matches`
-18. `GET /group-fund/summary`
-19. `GET /group-fund/ledger`
-20. `GET /group-fund/matches`
+18. `POST /group-fund/transactions`
+19. `GET /group-fund/transactions`
+20. `GET /group-fund/summary`
+21. `GET /group-fund/ledger`
+22. `GET /group-fund/matches`
 
 ### Phase 5: operational safety
-21. `POST /matches/:matchId/void`
-22. `PUT /recent-match-presets/:module`
+23. `POST /matches/:matchId/void`
+24. `PUT /recent-match-presets/:module`
 
 ---
 
@@ -1557,6 +1574,8 @@ GET    /api/v1/match-stakes/summary
 GET    /api/v1/match-stakes/ledger
 GET    /api/v1/match-stakes/matches
 
+POST   /api/v1/group-fund/transactions
+GET    /api/v1/group-fund/transactions
 GET    /api/v1/group-fund/summary
 GET    /api/v1/group-fund/ledger
 GET    /api/v1/group-fund/matches
@@ -1587,4 +1606,3 @@ Nếu đi tiếp bước code backend, tài liệu này là đủ để bắt đ
 - `services`
 - `repositories`
 - `domain calculation engine`
-

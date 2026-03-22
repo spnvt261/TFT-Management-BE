@@ -81,6 +81,20 @@ describe("API - rules, matches, summaries", () => {
       url: "/api/v1/rule-sets/default/by-module/MATCH_STAKES"
     });
     expect(defaultResponse.statusCode).toBe(200);
+    expect(defaultResponse.json().data.activeVersion).toBeNull();
+
+    const defaultWithParticipantCountResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/rule-sets/default/by-module/MATCH_STAKES?participantCount=4"
+    });
+    expect(defaultWithParticipantCountResponse.statusCode).toBe(200);
+    expect(defaultWithParticipantCountResponse.json().data.activeVersion).not.toBeNull();
+
+    const invalidParticipantCountResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/rule-sets/default/by-module/MATCH_STAKES?participantCount=5"
+    });
+    expect(invalidParticipantCountResponse.statusCode).toBe(400);
   });
 
   it("validates match creation and supports create/detail/preset/summaries", async () => {
@@ -159,6 +173,25 @@ describe("API - rules, matches, summaries", () => {
 
     const groupFundSummaryResponse = await app.inject({ method: "GET", url: "/api/v1/group-fund/summary" });
     expect(groupFundSummaryResponse.statusCode).toBe(200);
+
+    const createManualGroupFundTransactionResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/group-fund/transactions",
+      payload: {
+        transactionType: "CONTRIBUTION",
+        playerId: "10000000-0000-4000-8000-000000000001",
+        amountVnd: 25000,
+        reason: "Manual contribution"
+      }
+    });
+    expect(createManualGroupFundTransactionResponse.statusCode).toBe(201);
+
+    const listManualGroupFundTransactionsResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/group-fund/transactions?page=1&pageSize=20"
+    });
+    expect(listManualGroupFundTransactionsResponse.statusCode).toBe(200);
+    expect(listManualGroupFundTransactionsResponse.json().data.length).toBeGreaterThanOrEqual(1);
 
     const groupFundLedgerResponse = await app.inject({ method: "GET", url: "/api/v1/group-fund/ledger?page=1&pageSize=20" });
     expect(groupFundLedgerResponse.statusCode).toBe(200);

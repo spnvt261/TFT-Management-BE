@@ -82,6 +82,9 @@ const updateRuleSetVersionSchema = z
 const ruleSetIdParamSchema = z.object({ ruleSetId: z.string().uuid() });
 const ruleSetVersionParamSchema = z.object({ ruleSetId: z.string().uuid(), versionId: z.string().uuid() });
 const moduleParamSchema = z.object({ module: moduleTypeSchema });
+const defaultByModuleQuerySchema = z.object({
+  participantCount: z.coerce.number().int().pipe(z.union([z.literal(3), z.literal(4)])).optional()
+});
 
 const ruleConditionResponseSchema = z.object({
   id: z.string().uuid().optional(),
@@ -360,6 +363,7 @@ export async function registerRuleRoutes(app: FastifyInstance, services: AppServ
         tags: ["Rules"],
         summary: "Get default rule set by module",
         params: toSwaggerSchema(moduleParamSchema),
+        querystring: toSwaggerSchema(defaultByModuleQuerySchema),
         response: {
           200: successResponseSchema(defaultByModuleResponseSchema),
           ...errorResponseSchemas
@@ -368,7 +372,8 @@ export async function registerRuleRoutes(app: FastifyInstance, services: AppServ
     },
     async (request) => {
       const params = moduleParamSchema.parse(request.params);
-      return ok(await services.rules.getDefaultByModule(params.module));
+      const query = defaultByModuleQuerySchema.parse(request.query);
+      return ok(await services.rules.getDefaultByModule(params.module, query.participantCount));
     }
   );
 }

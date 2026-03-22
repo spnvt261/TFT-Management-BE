@@ -53,7 +53,7 @@ export class PlayerRepository {
 
     if (input.isActive !== undefined) {
       params.push(input.isActive);
-      conditions.push(`p.is_active = $${params.length}`);
+      conditions.push(`gm.is_active = $${params.length}`);
     }
 
     if (input.search) {
@@ -67,7 +67,7 @@ export class PlayerRepository {
       `
       SELECT COUNT(*)::text AS count
       FROM players p
-      INNER JOIN group_members gm ON gm.player_id = p.id AND gm.is_active = TRUE
+      INNER JOIN group_members gm ON gm.player_id = p.id
       WHERE ${whereSql}
       `,
       params
@@ -85,9 +85,9 @@ export class PlayerRepository {
       updated_at: string;
     }>(
       `
-      SELECT p.id, p.display_name, p.slug, p.avatar_url, p.is_active, p.created_at, p.updated_at
+      SELECT p.id, p.display_name, p.slug, p.avatar_url, gm.is_active, p.created_at, p.updated_at
       FROM players p
-      INNER JOIN group_members gm ON gm.player_id = p.id AND gm.is_active = TRUE
+      INNER JOIN group_members gm ON gm.player_id = p.id
       WHERE ${whereSql}
       ORDER BY p.created_at DESC
       LIMIT $${params.length - 1} OFFSET $${params.length}
@@ -124,13 +124,16 @@ export class PlayerRepository {
     await this.db.query(
       `
       INSERT INTO group_members(group_id, player_id, is_primary, is_active)
-      VALUES ($1, $2, TRUE, TRUE)
+      VALUES ($1, $2, TRUE, $3)
       ON CONFLICT (group_id, player_id) DO NOTHING
       `,
-      [input.groupId, player.id]
+      [input.groupId, player.id, input.isActive]
     );
 
-    return mapPlayer(player);
+    return mapPlayer({
+      ...player,
+      is_active: input.isActive
+    });
   }
 
   public async findById(playerId: string, groupId: string): Promise<PlayerRecord | null> {
@@ -144,9 +147,9 @@ export class PlayerRepository {
       updated_at: string;
     }>(
       `
-      SELECT p.id, p.display_name, p.slug, p.avatar_url, p.is_active, p.created_at, p.updated_at
+      SELECT p.id, p.display_name, p.slug, p.avatar_url, gm.is_active, p.created_at, p.updated_at
       FROM players p
-      INNER JOIN group_members gm ON gm.player_id = p.id AND gm.group_id = $2 AND gm.is_active = TRUE
+      INNER JOIN group_members gm ON gm.player_id = p.id AND gm.group_id = $2
       WHERE p.id = $1
       LIMIT 1
       `,
@@ -158,6 +161,46 @@ export class PlayerRepository {
   }
 
   public async update(playerId: string, groupId: string, input: UpdatePlayerInput): Promise<PlayerRecord | null> {
+    const membership = await this.db.query<{ is_active: boolean }>(
+      `
+      SELECT is_active
+      FROM group_members
+      WHERE group_id = $1 AND player_id = $2
+      LIMIT 1
+      `,
+      [groupId, playerId]
+    );
+
+    if (!membership.rows[0]) {
+      return null;
+    }
+
+    if (input.isActive !== undefined) {
+      await this.db.query(
+        `
+        UPDATE group_members
+        SET
+          is_active = $3,
+          left_at = CASE WHEN $3 = FALSE THEN COALESCE(left_at, now()) ELSE NULL END
+        WHERE group_id = $1 AND player_id = $2
+        `,
+        [groupId, playerId, input.isActive]
+      );
+    }
+
+    await this.db.query(
+      `
+      UPDATE players p
+      SET
+        display_name = COALESCE($2, p.display_name),
+        slug = CASE WHEN $3::boolean THEN NULL ELSE COALESCE($4, p.slug) END,
+        avatar_url = CASE WHEN $5::boolean THEN NULL ELSE COALESCE($6, p.avatar_url) END,
+        updated_at = now()
+      WHERE p.id = $1
+      `,
+      [playerId, input.displayName ?? null, input.slug === null, input.slug ?? null, input.avatarUrl === null, input.avatarUrl ?? null]
+    );
+
     const result = await this.db.query<{
       id: string;
       display_name: string;
@@ -168,30 +211,13 @@ export class PlayerRepository {
       updated_at: string;
     }>(
       `
-      UPDATE players p
-      SET
-        display_name = COALESCE($3, p.display_name),
-        slug = CASE WHEN $4::boolean THEN NULL ELSE COALESCE($5, p.slug) END,
-        avatar_url = CASE WHEN $6::boolean THEN NULL ELSE COALESCE($7, p.avatar_url) END,
-        is_active = COALESCE($8, p.is_active),
-        updated_at = now()
-      FROM group_members gm
+      SELECT p.id, p.display_name, p.slug, p.avatar_url, gm.is_active, p.created_at, p.updated_at
+      FROM players p
+      INNER JOIN group_members gm ON gm.player_id = p.id AND gm.group_id = $2
       WHERE p.id = $1
-        AND gm.player_id = p.id
-        AND gm.group_id = $2
-        AND gm.is_active = TRUE
-      RETURNING p.id, p.display_name, p.slug, p.avatar_url, p.is_active, p.created_at, p.updated_at
+      LIMIT 1
       `,
-      [
-        playerId,
-        groupId,
-        input.displayName ?? null,
-        input.slug === null,
-        input.slug ?? null,
-        input.avatarUrl === null,
-        input.avatarUrl ?? null,
-        input.isActive ?? null
-      ]
+      [playerId, groupId]
     );
 
     const row = result.rows[0];
@@ -199,7 +225,35 @@ export class PlayerRepository {
   }
 
   public async softDelete(playerId: string, groupId: string): Promise<PlayerRecord | null> {
-    return this.update(playerId, groupId, { isActive: false });
+    const result = await this.db.query<{
+      id: string;
+      display_name: string;
+      slug: string | null;
+      avatar_url: string | null;
+      is_active: boolean;
+      created_at: string;
+      updated_at: string;
+    }>(
+      `
+      WITH updated_membership AS (
+        UPDATE group_members gm
+        SET
+          is_active = FALSE,
+          left_at = COALESCE(gm.left_at, now())
+        WHERE gm.group_id = $2 AND gm.player_id = $1
+        RETURNING gm.player_id
+      )
+      SELECT p.id, p.display_name, p.slug, p.avatar_url, gm.is_active, p.created_at, p.updated_at
+      FROM updated_membership um
+      INNER JOIN players p ON p.id = um.player_id
+      INNER JOIN group_members gm ON gm.player_id = p.id AND gm.group_id = $2
+      LIMIT 1
+      `,
+      [playerId, groupId]
+    );
+
+    const row = result.rows[0];
+    return row ? mapPlayer(row) : null;
   }
 
   public async findActiveByIds(groupId: string, playerIds: string[]): Promise<PlayerRecord[]> {
@@ -217,11 +271,10 @@ export class PlayerRepository {
       updated_at: string;
     }>(
       `
-      SELECT p.id, p.display_name, p.slug, p.avatar_url, p.is_active, p.created_at, p.updated_at
+      SELECT p.id, p.display_name, p.slug, p.avatar_url, gm.is_active, p.created_at, p.updated_at
       FROM players p
       INNER JOIN group_members gm ON gm.player_id = p.id AND gm.group_id = $1 AND gm.is_active = TRUE
       WHERE p.id = ANY($2::uuid[])
-        AND p.is_active = TRUE
       `,
       [groupId, playerIds]
     );

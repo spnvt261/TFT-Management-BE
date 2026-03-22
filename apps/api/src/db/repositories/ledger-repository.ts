@@ -2,6 +2,8 @@ import type { Queryable } from "../postgres/transaction.js";
 import type { LedgerEntryDraft } from "../../domain/models/records.js";
 import type { ModuleType } from "../../domain/models/enums.js";
 
+export type GroupFundTransactionType = "CONTRIBUTION" | "WITHDRAWAL" | "ADJUSTMENT_IN" | "ADJUSTMENT_OUT";
+
 export class LedgerRepository {
   public constructor(private readonly db: Queryable) {}
 
@@ -12,14 +14,15 @@ export class LedgerRepository {
     matchId: string | null;
     description: string;
     referenceCode: string | null;
+    postedAt?: string | null;
   }): Promise<{ id: string }> {
     const result = await this.db.query<{ id: string }>(
       `
-      INSERT INTO ledger_entry_batches(group_id, module, source_type, match_id, description, reference_code)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      INSERT INTO ledger_entry_batches(group_id, module, source_type, match_id, description, reference_code, posted_at)
+      VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, now()))
       RETURNING id
       `,
-      [input.groupId, input.module, input.sourceType, input.matchId, input.description, input.referenceCode]
+      [input.groupId, input.module, input.sourceType, input.matchId, input.description, input.referenceCode, input.postedAt ?? null]
     );
 
     return { id: result.rows[0]!.id };
@@ -376,6 +379,110 @@ export class LedgerRepository {
         totalContributedVnd: row.total_contributed_vnd,
         currentObligationVnd: row.current_obligation_vnd
       }))
+    };
+  }
+
+  public async listManualGroupFundTransactions(input: {
+    groupId: string;
+    transactionType?: GroupFundTransactionType;
+    playerId?: string;
+    from?: string;
+    to?: string;
+    page: number;
+    pageSize: number;
+  }): Promise<{ items: any[]; total: number }> {
+    const transactionTypeCase = `
+      CASE
+        WHEN sa.account_type = 'PLAYER_FUND_OBLIGATION' AND da.account_type = 'FUND_MAIN' THEN 'CONTRIBUTION'
+        WHEN sa.account_type = 'FUND_MAIN' AND da.account_type = 'PLAYER_FUND_OBLIGATION' THEN 'WITHDRAWAL'
+        WHEN sa.account_type = 'SYSTEM_HOLDING' AND da.account_type = 'FUND_MAIN' THEN 'ADJUSTMENT_IN'
+        WHEN sa.account_type = 'FUND_MAIN' AND da.account_type = 'SYSTEM_HOLDING' THEN 'ADJUSTMENT_OUT'
+        ELSE NULL
+      END
+    `;
+
+    const conditions = [
+      "b.group_id = $1",
+      "b.module = 'GROUP_FUND'",
+      "b.source_type IN ('MANUAL_ADJUSTMENT', 'SYSTEM_CORRECTION')",
+      `${transactionTypeCase} IS NOT NULL`
+    ];
+    const params: unknown[] = [input.groupId];
+
+    if (input.from) {
+      params.push(input.from);
+      conditions.push(`b.posted_at >= $${params.length}`);
+    }
+
+    if (input.to) {
+      params.push(input.to);
+      conditions.push(`b.posted_at <= $${params.length}`);
+    }
+
+    if (input.playerId) {
+      params.push(input.playerId);
+      conditions.push(`(sa.player_id = $${params.length} OR da.player_id = $${params.length})`);
+    }
+
+    if (input.transactionType) {
+      params.push(input.transactionType);
+      conditions.push(`${transactionTypeCase} = $${params.length}`);
+    }
+
+    const whereSql = conditions.join(" AND ");
+
+    const totalResult = await this.db.query<{ count: string }>(
+      `
+      SELECT COUNT(*)::text AS count
+      FROM ledger_entries e
+      INNER JOIN ledger_entry_batches b ON b.id = e.batch_id
+      INNER JOIN ledger_accounts sa ON sa.id = e.source_account_id
+      INNER JOIN ledger_accounts da ON da.id = e.destination_account_id
+      WHERE ${whereSql}
+      `,
+      params
+    );
+
+    params.push(input.pageSize, (input.page - 1) * input.pageSize);
+
+    const itemsResult = await this.db.query<{
+      entry_id: string;
+      batch_id: string;
+      posted_at: string;
+      source_type: string;
+      transaction_type: GroupFundTransactionType;
+      player_id: string | null;
+      player_name: string | null;
+      amount_vnd: number;
+      entry_reason: string;
+    }>(
+      `
+      SELECT
+        e.id AS entry_id,
+        b.id AS batch_id,
+        b.posted_at,
+        b.source_type,
+        ${transactionTypeCase} AS transaction_type,
+        COALESCE(sa.player_id, da.player_id) AS player_id,
+        COALESCE(sp.display_name, dp.display_name) AS player_name,
+        e.amount_vnd,
+        e.entry_reason
+      FROM ledger_entries e
+      INNER JOIN ledger_entry_batches b ON b.id = e.batch_id
+      INNER JOIN ledger_accounts sa ON sa.id = e.source_account_id
+      INNER JOIN ledger_accounts da ON da.id = e.destination_account_id
+      LEFT JOIN players sp ON sp.id = sa.player_id
+      LEFT JOIN players dp ON dp.id = da.player_id
+      WHERE ${whereSql}
+      ORDER BY b.posted_at DESC, e.entry_order ASC
+      LIMIT $${params.length - 1} OFFSET $${params.length}
+      `,
+      params
+    );
+
+    return {
+      items: itemsResult.rows,
+      total: Number(totalResult.rows[0]?.count ?? "0")
     };
   }
 }

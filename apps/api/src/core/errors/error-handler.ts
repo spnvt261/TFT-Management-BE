@@ -4,6 +4,25 @@ import { AppError } from "./app-error.js";
 
 export function registerErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((error, _request, reply) => {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: string }).code === "FST_ERR_VALIDATION"
+    ) {
+      const validationError = error as { validation?: unknown; message?: string };
+
+      reply.status(400).send({
+        success: false,
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "Request validation failed",
+          details: validationError.validation ?? validationError.message
+        }
+      });
+      return;
+    }
+
     if (error instanceof ZodError) {
       reply.status(400).send({
         success: false,

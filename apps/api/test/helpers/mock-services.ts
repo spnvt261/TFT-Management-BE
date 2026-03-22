@@ -38,6 +38,18 @@ interface MatchRecord {
   status: "POSTED" | "VOIDED";
 }
 
+interface ManualGroupFundTransaction {
+  batchId: string;
+  entryId: string;
+  postedAt: string;
+  sourceType: "MANUAL_ADJUSTMENT" | "SYSTEM_CORRECTION";
+  transactionType: "CONTRIBUTION" | "WITHDRAWAL" | "ADJUSTMENT_IN" | "ADJUSTMENT_OUT";
+  playerId: string | null;
+  playerName: string | null;
+  amountVnd: number;
+  reason: string;
+}
+
 function uid(prefix: string): string {
   void prefix;
   return randomUUID();
@@ -48,6 +60,7 @@ export function createMockServices(): AppServices {
   const rules = new Map<string, RuleSet>();
   const presets = new Map<ModuleType, any>();
   const matches = new Map<string, MatchRecord>();
+  const manualGroupFundTransactions: ManualGroupFundTransaction[] = [];
 
   const now = new Date().toISOString();
 
@@ -328,14 +341,19 @@ export function createMockServices(): AppServices {
         Object.assign(version, input);
         return version;
       },
-      getDefaultByModule: async (module) => {
+      getDefaultByModule: async (module, participantCount) => {
         const item = Array.from(rules.values()).find((value) => value.module === module && value.isDefault);
         if (!item) {
           throw new AppError(404, "RULE_SET_DEFAULT_NOT_FOUND", "Not found");
         }
         return {
           ruleSet: item,
-          activeVersion: item.versions[0] ?? null
+          activeVersion:
+            participantCount === undefined
+              ? null
+              : (item.versions.find(
+                  (version) => version.participantCountMin <= participantCount && version.participantCountMax >= participantCount
+                ) ?? null)
         };
       }
     } as any,
@@ -570,6 +588,40 @@ export function createMockServices(): AppServices {
       getMatches: async ({ page, pageSize }) => {
         const items = Array.from(matches.values()).filter((item) => item.module === "GROUP_FUND");
         return { items, total: items.length, page, pageSize };
+      },
+      createManualTransaction: async (input) => {
+        const transaction: ManualGroupFundTransaction = {
+          batchId: uid("batch"),
+          entryId: uid("entry"),
+          postedAt: input.postedAt ?? new Date().toISOString(),
+          sourceType:
+            input.transactionType === "ADJUSTMENT_IN" || input.transactionType === "ADJUSTMENT_OUT"
+              ? "SYSTEM_CORRECTION"
+              : "MANUAL_ADJUSTMENT",
+          transactionType: input.transactionType,
+          playerId: input.playerId ?? null,
+          playerName: input.playerId ? players.get(input.playerId)?.displayName ?? null : null,
+          amountVnd: input.amountVnd,
+          reason: input.reason
+        };
+
+        manualGroupFundTransactions.unshift(transaction);
+        return transaction;
+      },
+      listManualTransactions: async ({ transactionType, playerId, page, pageSize }) => {
+        let items = [...manualGroupFundTransactions];
+        if (transactionType) {
+          items = items.filter((item) => item.transactionType === transactionType);
+        }
+        if (playerId) {
+          items = items.filter((item) => item.playerId === playerId);
+        }
+
+        const start = (page - 1) * pageSize;
+        return {
+          items: items.slice(start, start + pageSize),
+          total: items.length
+        };
       }
     } as any
   };

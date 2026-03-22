@@ -138,17 +138,21 @@ export class RuleService {
     return version;
   }
 
-  public async getDefaultByModule(module: ModuleType) {
+  public async getDefaultByModule(module: ModuleType, participantCount?: number) {
     const ruleSet = await this.repositories.rules.getDefaultRuleSetByModule(this.groupId, module);
     if (!ruleSet) {
       throw notFound("RULE_SET_DEFAULT_NOT_FOUND", `No default rule set found for module ${module}`);
+    }
+
+    if (participantCount === undefined) {
+      return { ruleSet, activeVersion: null };
     }
 
     const now = new Date().toISOString();
     const activeVersion = await this.repositories.rules.resolveVersionForMatch({
       ruleSetId: ruleSet.id,
       module,
-      participantCount: 3,
+      participantCount,
       playedAt: now
     });
 

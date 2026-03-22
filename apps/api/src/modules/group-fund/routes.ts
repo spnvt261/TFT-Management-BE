@@ -13,6 +13,43 @@ const querySchema = z.object({
 });
 
 const summaryQuerySchema = z.object({ from: z.string().datetime().optional(), to: z.string().datetime().optional() });
+const groupFundTransactionTypeSchema = z.enum(["CONTRIBUTION", "WITHDRAWAL", "ADJUSTMENT_IN", "ADJUSTMENT_OUT"]);
+
+const createGroupFundTransactionSchema = z
+  .object({
+    transactionType: groupFundTransactionTypeSchema,
+    playerId: z.string().uuid().nullable().optional(),
+    amountVnd: z.coerce.number().int().positive(),
+    reason: z.string().min(3).max(500),
+    postedAt: z.string().datetime().optional()
+  })
+  .superRefine((value, context) => {
+    const needsPlayer = value.transactionType === "CONTRIBUTION" || value.transactionType === "WITHDRAWAL";
+    if (needsPlayer && !value.playerId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["playerId"],
+        message: "playerId is required for CONTRIBUTION and WITHDRAWAL"
+      });
+    }
+
+    if (!needsPlayer && value.playerId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["playerId"],
+        message: "playerId must be null for ADJUSTMENT_IN and ADJUSTMENT_OUT"
+      });
+    }
+  });
+
+const listGroupFundTransactionsQuerySchema = z.object({
+  transactionType: groupFundTransactionTypeSchema.optional(),
+  playerId: z.string().uuid().optional(),
+  from: z.string().datetime().optional(),
+  to: z.string().datetime().optional(),
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().positive().max(100).default(20)
+});
 
 const groupFundSummarySchema = z.object({
   module: z.literal("GROUP_FUND"),
@@ -71,7 +108,73 @@ const moduleMatchHistoryItemSchema = z.object({
   createdAt: z.string()
 });
 
+const groupFundTransactionResponseSchema = z.object({
+  entryId: z.string().uuid().optional(),
+  batchId: z.string().uuid(),
+  postedAt: z.string(),
+  sourceType: z.enum(["MANUAL_ADJUSTMENT", "SYSTEM_CORRECTION"]),
+  transactionType: groupFundTransactionTypeSchema,
+  playerId: z.string().uuid().nullable(),
+  playerName: z.string().nullable(),
+  amountVnd: z.number().int(),
+  reason: z.string()
+});
+
 export async function registerGroupFundRoutes(app: FastifyInstance, services: AppServices): Promise<void> {
+  app.post(
+    "/group-fund/transactions",
+    {
+      schema: {
+        tags: ["Group Fund"],
+        summary: "Create manual group-fund transaction",
+        body: toSwaggerSchema(createGroupFundTransactionSchema),
+        response: {
+          201: successResponseSchema(groupFundTransactionResponseSchema),
+          ...errorResponseSchemas
+        }
+      }
+    },
+    async (request, reply) => {
+      const input = createGroupFundTransactionSchema.parse(request.body);
+      const created = await services.groupFund.createManualTransaction({
+        transactionType: input.transactionType,
+        playerId: input.playerId ?? null,
+        amountVnd: input.amountVnd,
+        reason: input.reason,
+        postedAt: input.postedAt
+      });
+
+      reply.status(201);
+      return ok(created);
+    }
+  );
+
+  app.get(
+    "/group-fund/transactions",
+    {
+      schema: {
+        tags: ["Group Fund"],
+        summary: "List manual group-fund transactions",
+        querystring: toSwaggerSchema(listGroupFundTransactionsQuerySchema),
+        response: {
+          200: successResponseSchema(z.array(groupFundTransactionResponseSchema), paginationMetaSchema),
+          ...errorResponseSchemas
+        }
+      }
+    },
+    async (request) => {
+      const query = listGroupFundTransactionsQuerySchema.parse(request.query);
+      const result = await services.groupFund.listManualTransactions(query);
+
+      return ok(result.items, {
+        page: query.page,
+        pageSize: query.pageSize,
+        total: result.total,
+        totalPages: Math.ceil(result.total / query.pageSize)
+      });
+    }
+  );
+
   app.get(
     "/group-fund/summary",
     {
