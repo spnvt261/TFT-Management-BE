@@ -33,43 +33,43 @@ const groupFundSummarySchema = z.object({
 });
 
 const moduleLedgerItemSchema = z.object({
-  entry_id: z.string().uuid(),
-  posted_at: z.string(),
-  match_id: z.string().uuid().nullable(),
-  amount_vnd: z.number().int(),
-  entry_reason: z.string(),
-  source_player_id: z.string().uuid().nullable(),
-  source_player_name: z.string().nullable(),
-  destination_player_id: z.string().uuid().nullable(),
-  destination_player_name: z.string().nullable(),
-  rule_code: z.string().nullable(),
-  rule_name: z.string().nullable()
+  entryId: z.string().uuid(),
+  postedAt: z.string(),
+  matchId: z.string().uuid().nullable(),
+  relatedPlayerId: z.string().uuid().nullable(),
+  relatedPlayerName: z.string().nullable(),
+  amountVnd: z.number().int(),
+  movementType: z.enum(["FUND_IN", "FUND_OUT"]),
+  entryReason: z.string(),
+  ruleCode: z.string().nullable(),
+  ruleName: z.string().nullable()
 });
 
-const moduleMatchHistoryItemSchema = z
-  .object({
-    id: z.string().uuid(),
-    group_id: z.string().uuid().optional(),
-    module: z.literal("GROUP_FUND"),
-    rule_set_id: z.string().uuid().optional(),
-    rule_set_version_id: z.string().uuid().optional(),
-    played_at: z.string().optional(),
-    participant_count: z.number().int().optional(),
-    status: z.string(),
-    void_reason: z.string().nullable().optional(),
-    voided_at: z.string().nullable().optional(),
-    created_at: z.string().optional(),
-    updated_at: z.string().optional(),
-    ruleSetId: z.string().uuid().optional(),
-    ruleSetVersionId: z.string().uuid().optional(),
-    playedAt: z.string().optional(),
-    participantCount: z.number().int().optional(),
-    voidReason: z.string().nullable().optional(),
-    voidedAt: z.string().nullable().optional(),
-    createdAt: z.string().optional(),
-    updatedAt: z.string().optional()
-  })
-  .passthrough();
+const matchParticipantResponseSchema = z.object({
+  playerId: z.string().uuid(),
+  playerName: z.string(),
+  tftPlacement: z.number().int(),
+  relativeRank: z.number().int(),
+  settlementNetVnd: z.number().int()
+});
+
+const moduleMatchHistoryItemSchema = z.object({
+  id: z.string().uuid(),
+  module: z.literal("GROUP_FUND"),
+  playedAt: z.string(),
+  participantCount: z.number().int(),
+  ruleSetId: z.string().uuid(),
+  ruleSetName: z.string(),
+  ruleSetVersionId: z.string().uuid(),
+  ruleSetVersionNo: z.number().int().positive(),
+  notePreview: z.string().nullable(),
+  status: z.string(),
+  participants: z.array(matchParticipantResponseSchema),
+  totalTransferVnd: z.number().int(),
+  totalFundInVnd: z.number().int(),
+  totalFundOutVnd: z.number().int(),
+  createdAt: z.string()
+});
 
 export async function registerGroupFundRoutes(app: FastifyInstance, services: AppServices): Promise<void> {
   app.get(
@@ -107,8 +107,28 @@ export async function registerGroupFundRoutes(app: FastifyInstance, services: Ap
     async (request) => {
       const query = querySchema.parse(request.query);
       const result = await services.groupFund.getLedger(query);
+      const items = result.items.map((item) => {
+        const isFundIn =
+          item.destination_account_type === "FUND_MAIN" ||
+          (item.source_player_id !== null && item.destination_player_id === null);
+        const relatedPlayerId = isFundIn ? item.source_player_id : item.destination_player_id;
+        const relatedPlayerName = isFundIn ? item.source_player_name : item.destination_player_name;
 
-      return ok(result.items, {
+        return {
+          entryId: item.entry_id,
+          postedAt: item.posted_at,
+          matchId: item.match_id,
+          relatedPlayerId,
+          relatedPlayerName,
+          amountVnd: item.amount_vnd,
+          movementType: isFundIn ? "FUND_IN" : "FUND_OUT",
+          entryReason: item.entry_reason,
+          ruleCode: item.rule_code,
+          ruleName: item.rule_name
+        };
+      });
+
+      return ok(items, {
         page: query.page,
         pageSize: query.pageSize,
         total: result.total,
@@ -141,7 +161,15 @@ export async function registerGroupFundRoutes(app: FastifyInstance, services: Ap
         })
         .parse(request.query);
 
-      const result = await services.groupFund.getMatches(query);
+      const result = await services.matches.listMatches({
+        module: "GROUP_FUND",
+        playerId: query.playerId,
+        ruleSetId: query.ruleSetId,
+        from: query.from,
+        to: query.to,
+        page: query.page,
+        pageSize: query.pageSize
+      });
 
       return ok(result.items, {
         page: query.page,

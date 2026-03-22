@@ -4,13 +4,13 @@ import { withTransaction } from "../../db/postgres/transaction.js";
 import { createRepositories, type RepositoryBundle } from "../../db/repositories/repository-factory.js";
 import { RuleEngineService } from "../../domain/services/rule-engine/rule-engine.service.js";
 import { LedgerPostingService } from "../../domain/services/ledger-posting/ledger-posting.service.js";
-import type { ModuleType } from "../../domain/models/enums.js";
+import type { MatchStatus, ModuleType } from "../../domain/models/enums.js";
 import { AccountResolutionHelper } from "../../db/repositories/account-resolution-helper.js";
 import { AccountRepository } from "../../db/repositories/account-repository.js";
 
 export interface CreateMatchInput {
   module: ModuleType;
-  playedAt: string;
+  playedAt?: string;
   ruleSetId: string;
   ruleSetVersionId?: string;
   note?: string | null;
@@ -29,6 +29,7 @@ export class MatchService {
 
   public async createMatch(input: CreateMatchInput) {
     this.validateParticipants(input.participants);
+    const playedAt = input.playedAt ?? new Date().toISOString();
 
     return withTransaction(this.pool, async (tx) => {
       const txRepositories = createRepositories(tx);
@@ -52,7 +53,7 @@ export class MatchService {
         ruleSetId: input.ruleSetId,
         module: input.module,
         participantCount: input.participants.length,
-        playedAt: input.playedAt,
+        playedAt,
         versionId: input.ruleSetVersionId
       });
 
@@ -71,7 +72,7 @@ export class MatchService {
         groupId: this.groupId,
         module: input.module,
         participantCount: input.participants.length,
-        playedAt: input.playedAt,
+        playedAt,
         participants: input.participants,
         version: ruleVersion
       });
@@ -84,10 +85,13 @@ export class MatchService {
         module: input.module,
         ruleSetId: input.ruleSetId,
         ruleSetVersionId: ruleVersion.id,
-        playedAt: input.playedAt,
+        playedAt,
         participantCount: input.participants.length,
         status: "POSTED",
-        inputSnapshot: input,
+        inputSnapshot: {
+          ...input,
+          playedAt
+        },
         calculationSnapshot: {
           ruleVersionId: ruleVersion.id,
           summary: evaluated.summary
@@ -146,7 +150,7 @@ export class MatchService {
         lastRuleSetVersionId: ruleVersion.id,
         lastSelectedPlayerIds: input.participants.map((participant) => participant.playerId),
         lastParticipantCount: input.participants.length,
-        lastUsedAt: input.playedAt
+        lastUsedAt: playedAt
       });
 
       await txRepositories.audits.insert({
@@ -168,6 +172,7 @@ export class MatchService {
 
   public async listMatches(input: {
     module?: ModuleType;
+    status?: MatchStatus;
     playerId?: string;
     ruleSetId?: string;
     from?: string;
@@ -178,6 +183,7 @@ export class MatchService {
     const list = await this.repositories.matches.list({
       groupId: this.groupId,
       module: input.module,
+      status: input.status,
       playerId: input.playerId,
       ruleSetId: input.ruleSetId,
       from: input.from,
@@ -188,9 +194,12 @@ export class MatchService {
 
     const items = await Promise.all(
       list.items.map(async (match) => {
-        const participants = await this.repositories.matches.getParticipants(match.id);
-        const settlement = await this.repositories.settlements.getSettlementWithLines(match.id);
-        const ruleSet = await this.repositories.rules.getRuleSetById(this.groupId, match.rule_set_id);
+        const [participants, settlement, ruleSet, note] = await Promise.all([
+          this.repositories.matches.getParticipants(match.id),
+          this.repositories.settlements.getSettlementWithLines(match.id),
+          this.repositories.rules.getRuleSetById(this.groupId, match.rule_set_id),
+          this.repositories.matches.getNote(match.id)
+        ]);
 
         return {
           id: match.id,
@@ -200,7 +209,8 @@ export class MatchService {
           ruleSetId: match.rule_set_id,
           ruleSetName: ruleSet?.name ?? "Unknown",
           ruleSetVersionId: match.rule_set_version_id,
-          notePreview: null,
+          ruleSetVersionNo: match.rule_set_version_no ?? 1,
+          notePreview: note ? note.slice(0, 120) : null,
           status: match.status,
           participants,
           totalTransferVnd: settlement?.totalTransferVnd ?? 0,

@@ -27,6 +27,7 @@ export interface MatchDetailRow {
   module: ModuleType;
   rule_set_id: string;
   rule_set_version_id: string;
+  rule_set_version_no?: number;
   played_at: string;
   participant_count: number;
   status: MatchStatus;
@@ -39,6 +40,7 @@ export interface MatchDetailRow {
 export interface MatchListFilters {
   groupId: string;
   module?: ModuleType;
+  status?: MatchStatus;
   playerId?: string;
   ruleSetId?: string;
   from?: string;
@@ -132,6 +134,11 @@ export class MatchRepository {
       conditions.push(`m.module = $${params.length}`);
     }
 
+    if (filters.status) {
+      params.push(filters.status);
+      conditions.push(`m.status = $${params.length}`);
+    }
+
     if (filters.playerId) {
       params.push(filters.playerId);
       conditions.push(`EXISTS (SELECT 1 FROM match_participants mp2 WHERE mp2.match_id = m.id AND mp2.player_id = $${params.length})`);
@@ -163,9 +170,10 @@ export class MatchRepository {
 
     const result = await this.db.query<MatchDetailRow>(
       `
-      SELECT m.id, m.group_id, m.module, m.rule_set_id, m.rule_set_version_id, m.played_at, m.participant_count,
-             m.status, m.void_reason, m.voided_at, m.created_at, m.updated_at
+      SELECT m.id, m.group_id, m.module, m.rule_set_id, m.rule_set_version_id, rsv.version_no AS rule_set_version_no,
+             m.played_at, m.participant_count, m.status, m.void_reason, m.voided_at, m.created_at, m.updated_at
       FROM matches m
+      INNER JOIN rule_set_versions rsv ON rsv.id = m.rule_set_version_id
       WHERE ${whereSql}
       ORDER BY m.played_at DESC, m.created_at DESC
       LIMIT $${params.length - 1} OFFSET $${params.length}

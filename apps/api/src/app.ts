@@ -11,6 +11,7 @@ import { registerMatchRoutes } from "./modules/matches/routes.js";
 import { registerPresetRoutes } from "./modules/presets/routes.js";
 import { registerMatchStakesRoutes } from "./modules/match-stakes/routes.js";
 import { registerGroupFundRoutes } from "./modules/group-fund/routes.js";
+import { registerDashboardRoutes } from "./modules/dashboard/routes.js";
 import { openApiTags } from "./core/docs/swagger.js";
 
 export async function createApp(services: AppServices) {
@@ -49,6 +50,7 @@ export async function createApp(services: AppServices) {
     await registerPresetRoutes(api, services);
     await registerMatchStakesRoutes(api, services);
     await registerGroupFundRoutes(api, services);
+    await registerDashboardRoutes(api, services);
   }, { prefix: "/api/v1" });
 
   return app;

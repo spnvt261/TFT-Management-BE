@@ -46,5 +46,6 @@ export const openApiTags = [
   { name: "Matches", description: "Match creation, listing, detail and void" },
   { name: "Presets", description: "Recent match presets by module" },
   { name: "Match Stakes", description: "Match stakes summary, ledger and match history" },
-  { name: "Group Fund", description: "Group fund summary, ledger and match history" }
+  { name: "Group Fund", description: "Group fund summary, ledger and match history" },
+  { name: "Dashboard", description: "Dashboard overview metrics" }
 ];

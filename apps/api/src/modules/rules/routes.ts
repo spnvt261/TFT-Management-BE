@@ -65,7 +65,6 @@ const ruleSchema = z.object({
 const createRuleSetVersionSchema = z.object({
   participantCountMin: z.coerce.number().int().min(2).max(8),
   participantCountMax: z.coerce.number().int().min(2).max(8),
-  effectiveFrom: z.string().datetime().optional(),
   effectiveTo: z.string().datetime().nullable().optional(),
   isActive: z.boolean().optional().default(true),
   summaryJson: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -75,7 +74,6 @@ const createRuleSetVersionSchema = z.object({
 const updateRuleSetVersionSchema = z
   .object({
     isActive: z.boolean().optional(),
-    effectiveFrom: z.string().datetime().optional(),
     effectiveTo: z.string().datetime().nullable().optional(),
     summaryJson: z.record(z.string(), z.unknown()).nullable().optional()
   })
@@ -271,7 +269,7 @@ export async function registerRuleRoutes(app: FastifyInstance, services: AppServ
       const created = await services.rules.createVersion(params.ruleSetId, {
         participantCountMin: input.participantCountMin,
         participantCountMax: input.participantCountMax,
-        effectiveFrom: input.effectiveFrom ?? new Date().toISOString(),
+        effectiveFrom: new Date().toISOString(),
         effectiveTo: input.effectiveTo ?? null,
         isActive: input.isActive,
         summaryJson: input.summaryJson ?? null,
@@ -348,7 +346,6 @@ export async function registerRuleRoutes(app: FastifyInstance, services: AppServ
       return ok(
         await services.rules.updateVersion(params.ruleSetId, params.versionId, {
           isActive: input.isActive,
-          effectiveFrom: input.effectiveFrom,
           effectiveTo: input.effectiveTo,
           summaryJson: input.summaryJson ?? undefined
         })

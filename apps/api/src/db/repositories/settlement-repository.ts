@@ -90,7 +90,9 @@ export class SettlementRepository {
           sourceAccountId: string;
           destinationAccountId: string;
           sourcePlayerId: string | null;
+          sourcePlayerName: string | null;
           destinationPlayerId: string | null;
+          destinationPlayerName: string | null;
           amountVnd: number;
           reasonText: string;
           metadata: unknown;
@@ -132,16 +134,21 @@ export class SettlementRepository {
       source_account_id: string;
       destination_account_id: string;
       source_player_id: string | null;
+      source_player_name: string | null;
       destination_player_id: string | null;
+      destination_player_name: string | null;
       amount_vnd: number;
       reason_text: string;
       metadata_json: unknown;
     }>(
       `
-      SELECT id, line_no, rule_id, rule_code, rule_name, source_account_id, destination_account_id,
-             source_player_id, destination_player_id, amount_vnd, reason_text, metadata_json
-      FROM match_settlement_lines
-      WHERE match_settlement_id = $1
+      SELECT msl.id, msl.line_no, msl.rule_id, msl.rule_code, msl.rule_name, msl.source_account_id, msl.destination_account_id,
+             msl.source_player_id, sp.display_name AS source_player_name, msl.destination_player_id,
+             dp.display_name AS destination_player_name, msl.amount_vnd, msl.reason_text, msl.metadata_json
+      FROM match_settlement_lines msl
+      LEFT JOIN players sp ON sp.id = msl.source_player_id
+      LEFT JOIN players dp ON dp.id = msl.destination_player_id
+      WHERE msl.match_settlement_id = $1
       ORDER BY line_no ASC
       `,
       [settlementRow.id]
@@ -165,7 +172,9 @@ export class SettlementRepository {
         sourceAccountId: row.source_account_id,
         destinationAccountId: row.destination_account_id,
         sourcePlayerId: row.source_player_id,
+        sourcePlayerName: row.source_player_name,
         destinationPlayerId: row.destination_player_id,
+        destinationPlayerName: row.destination_player_name,
         amountVnd: row.amount_vnd,
         reasonText: row.reason_text,
         metadata: row.metadata_json

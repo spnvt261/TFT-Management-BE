@@ -2,12 +2,11 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ok } from "../../core/types/api.js";
 import type { AppServices } from "../../core/types/container.js";
-import { moduleTypeSchema } from "../../domain/models/enums.js";
+import { matchStatusSchema, moduleTypeSchema } from "../../domain/models/enums.js";
 import { errorResponseSchemas, paginationMetaSchema, successResponseSchema, toSwaggerSchema } from "../../core/docs/swagger.js";
 
 const createMatchSchema = z.object({
   module: moduleTypeSchema,
-  playedAt: z.string().datetime(),
   ruleSetId: z.string().uuid(),
   ruleSetVersionId: z.string().uuid().optional(),
   note: z.string().max(4000).nullable().optional(),
@@ -24,6 +23,7 @@ const createMatchSchema = z.object({
 
 const listMatchesQuerySchema = z.object({
   module: moduleTypeSchema.optional(),
+  status: matchStatusSchema.optional(),
   playerId: z.string().uuid().optional(),
   ruleSetId: z.string().uuid().optional(),
   from: z.string().datetime().optional(),
@@ -56,7 +56,9 @@ const settlementLineResponseSchema = z.object({
   sourceAccountId: z.string().uuid(),
   destinationAccountId: z.string().uuid(),
   sourcePlayerId: z.string().uuid().nullable(),
+  sourcePlayerName: z.string().nullable(),
   destinationPlayerId: z.string().uuid().nullable(),
+  destinationPlayerName: z.string().nullable(),
   amountVnd: z.number().int(),
   reasonText: z.string(),
   metadata: z.unknown()
@@ -82,6 +84,7 @@ const matchListItemResponseSchema = z.object({
   ruleSetId: z.string().uuid(),
   ruleSetName: z.string(),
   ruleSetVersionId: z.string().uuid(),
+  ruleSetVersionNo: z.number().int().positive(),
   notePreview: z.string().nullable(),
   status: z.string(),
   participants: z.array(matchParticipantResponseSchema),

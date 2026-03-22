@@ -88,7 +88,6 @@ describe("API - rules, matches, summaries", () => {
 
     const duplicatePlayerPayload = {
       module: "MATCH_STAKES",
-      playedAt: new Date().toISOString(),
       ruleSetId: "20000000-0000-4000-8000-000000000001",
       participants: [
         { playerId: "10000000-0000-4000-8000-000000000001", tftPlacement: 1 },
@@ -125,7 +124,6 @@ describe("API - rules, matches, summaries", () => {
       url: "/api/v1/matches",
       payload: {
         module: "MATCH_STAKES",
-        playedAt: new Date().toISOString(),
         ruleSetId: "20000000-0000-4000-8000-000000000001",
         participants: [
           { playerId: "10000000-0000-4000-8000-000000000001", tftPlacement: 1 },
@@ -167,5 +165,8 @@ describe("API - rules, matches, summaries", () => {
 
     const groupFundMatchesResponse = await app.inject({ method: "GET", url: "/api/v1/group-fund/matches?page=1&pageSize=20" });
     expect(groupFundMatchesResponse.statusCode).toBe(200);
+
+    const dashboardResponse = await app.inject({ method: "GET", url: "/api/v1/dashboard/overview" });
+    expect(dashboardResponse.statusCode).toBe(200);
   });
 });

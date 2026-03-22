@@ -156,6 +156,8 @@ export class LedgerRepository {
       source_player_name: string | null;
       destination_player_id: string | null;
       destination_player_name: string | null;
+      source_account_type: string;
+      destination_account_type: string;
       rule_code: string | null;
       rule_name: string | null;
     }>(
@@ -170,6 +172,8 @@ export class LedgerRepository {
         spa.display_name AS source_player_name,
         dpa.id AS destination_player_id,
         dpa.display_name AS destination_player_name,
+        sa.account_type AS source_account_type,
+        da.account_type AS destination_account_type,
         msl.rule_code,
         msl.rule_name
       FROM ledger_entries e

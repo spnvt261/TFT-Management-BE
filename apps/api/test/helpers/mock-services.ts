@@ -375,13 +375,14 @@ export function createMockServices(): AppServices {
           throw new AppError(422, "MATCH_RULE_SET_MODULE_MISMATCH", "Rule set module does not match request module");
         }
 
+        const playedAt = input.playedAt ?? new Date().toISOString();
         const id = uid("match");
         const version = ruleSet.versions[0];
 
         const record: MatchRecord = {
           id,
           module: input.module,
-          playedAt: input.playedAt,
+          playedAt,
           participantCount: input.participants.length,
           ruleSetId: input.ruleSetId,
           ruleSetVersionId: version?.id ?? "",
@@ -396,13 +397,13 @@ export function createMockServices(): AppServices {
           lastRuleSetVersionId: version?.id ?? null,
           lastSelectedPlayerIds: input.participants.map((participant) => participant.playerId),
           lastParticipantCount: input.participants.length,
-          lastUsedAt: input.playedAt
+          lastUsedAt: playedAt
         });
 
         return {
           id,
           module: input.module,
-          playedAt: input.playedAt,
+          playedAt,
           participantCount: input.participants.length,
           status: "POSTED",
           participants: input.participants.map((participant, index) => ({
@@ -426,10 +427,13 @@ export function createMockServices(): AppServices {
           }
         };
       },
-      listMatches: async ({ module, page, pageSize }) => {
+      listMatches: async ({ module, status, page, pageSize }) => {
         let items = Array.from(matches.values());
         if (module) {
           items = items.filter((item) => item.module === module);
+        }
+        if (status) {
+          items = items.filter((item) => item.status === status);
         }
         const start = (page - 1) * pageSize;
         return {
@@ -444,6 +448,7 @@ export function createMockServices(): AppServices {
             })),
             ruleSetName: rules.get(item.ruleSetId)?.name ?? "unknown",
             notePreview: null,
+            ruleSetVersionNo: 1,
             totalTransferVnd: 0,
             totalFundInVnd: 0,
             totalFundOutVnd: 0,
