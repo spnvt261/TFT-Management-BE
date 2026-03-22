@@ -1,0 +1,35 @@
+{
+  "name": "@tft2/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "fastify": "^5.6.1",
+    "pg": "^8.16.3",
+    "pino": "^9.13.1",
+    "pino-pretty": "^13.1.2",
+    "tft2-backend-nodejs": "file:../..",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^24.8.1",
+    "@types/pg": "^8.15.5",
+    "eslint": "^9.39.1",
+    "globals": "^16.4.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.2",
+    "vitest": "^3.2.4"
+  }
+}

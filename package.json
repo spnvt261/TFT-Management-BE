@@ -1,0 +1,12 @@
+{
+  "name": "tft2-backend-nodejs",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "npm --prefix apps/api run dev",
+    "build": "npm --prefix apps/api run build",
+    "start": "npm --prefix apps/api run start",
+    "test": "npm --prefix apps/api run test",
+    "lint": "npm --prefix apps/api run lint"
+  }
+}

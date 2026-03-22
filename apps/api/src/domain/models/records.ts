@@ -1,0 +1,98 @@
+export interface GroupRecord {
+  id: string;
+  code: string;
+  name: string;
+  timezone: string;
+  currencyCode: string;
+}
+
+export interface PlayerRecord {
+  id: string;
+  displayName: string;
+  slug: string | null;
+  avatarUrl: string | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RuleSetRecord {
+  id: string;
+  module: string;
+  code: string;
+  name: string;
+  description: string | null;
+  status: string;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RuleConditionRecord {
+  id: string;
+  conditionKey: string;
+  operator: string;
+  valueJson: unknown;
+  sortOrder: number;
+}
+
+export interface RuleActionRecord {
+  id: string;
+  actionType: string;
+  amountVnd: number;
+  sourceSelectorType: string;
+  sourceSelectorJson: unknown;
+  destinationSelectorType: string;
+  destinationSelectorJson: unknown;
+  descriptionTemplate: string | null;
+  sortOrder: number;
+}
+
+export interface RuleRecord {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  ruleKind: string;
+  priority: number;
+  status: string;
+  stopProcessingOnMatch: boolean;
+  metadata: unknown;
+  conditions: RuleConditionRecord[];
+  actions: RuleActionRecord[];
+}
+
+export interface RuleSetVersionRecord {
+  id: string;
+  ruleSetId: string;
+  versionNo: number;
+  participantCountMin: number;
+  participantCountMax: number;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  isActive: boolean;
+  summaryJson: unknown;
+  createdAt: string;
+  rules: RuleRecord[];
+}
+
+export interface SettlementLineDraft {
+  ruleId: string | null;
+  ruleCode: string;
+  ruleName: string;
+  sourceAccountId: string;
+  destinationAccountId: string;
+  sourcePlayerId: string | null;
+  destinationPlayerId: string | null;
+  amountVnd: number;
+  reasonText: string;
+  metadataJson: unknown;
+}
+
+export interface LedgerEntryDraft {
+  sourceAccountId: string;
+  destinationAccountId: string;
+  amountVnd: number;
+  reasonText: string;
+  lineNo: number;
+}

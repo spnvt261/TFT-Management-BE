@@ -1,0 +1,15 @@
+CREATE INDEX IF NOT EXISTS idx_group_members_group_active ON group_members(group_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_rule_sets_group_module_status ON rule_sets(group_id, module, status);
+CREATE INDEX IF NOT EXISTS idx_rule_set_versions_rule_set_active_window ON rule_set_versions(rule_set_id, is_active, effective_from, effective_to);
+CREATE INDEX IF NOT EXISTS idx_rules_version_priority_status ON rules(rule_set_version_id, priority, status);
+CREATE INDEX IF NOT EXISTS idx_matches_group_module_played_at ON matches(group_id, module, played_at DESC);
+CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status);
+CREATE INDEX IF NOT EXISTS idx_match_participants_player_match ON match_participants(player_id, match_id);
+CREATE INDEX IF NOT EXISTS idx_match_settlement_lines_match ON match_settlement_lines(match_id, line_no);
+CREATE INDEX IF NOT EXISTS idx_ledger_accounts_group_type ON ledger_accounts(group_id, account_type);
+CREATE INDEX IF NOT EXISTS idx_ledger_batches_group_module_posted_at ON ledger_entry_batches(group_id, module, posted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ledger_entries_source_created_at ON ledger_entries(source_account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ledger_entries_destination_created_at ON ledger_entries(destination_account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ledger_entries_batch ON ledger_entries(batch_id);
+CREATE INDEX IF NOT EXISTS idx_recent_preset_group_module ON recent_match_presets(group_id, module);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_group_created_at ON audit_logs(group_id, created_at DESC);
