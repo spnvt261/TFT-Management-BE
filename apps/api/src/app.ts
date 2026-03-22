@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import cors from "@fastify/cors";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import type { AppServices } from "./core/types/container.js";
@@ -19,6 +20,10 @@ export async function createApp(services: AppServices) {
     logger: {
       level: env.app.logLevel
     }
+  });
+
+  await app.register(cors, {
+    origin: "*"
   });
 
   registerErrorHandler(app);

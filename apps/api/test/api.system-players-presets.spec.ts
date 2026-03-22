@@ -24,6 +24,21 @@ describe("API - health, players, presets", () => {
     expect(body.data.service).toBe("tft-history-api");
   });
 
+  it("returns CORS header for cross-origin requests", async () => {
+    app = await createApp(createMockServices());
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/players?page=1&pageSize=12&isActive=true",
+      headers: {
+        origin: "http://localhost:5173"
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["access-control-allow-origin"]).toBe("*");
+  });
+
   it("supports player CRUD flow", async () => {
     app = await createApp(createMockServices());
 
