@@ -5,6 +5,7 @@ import { ok } from "../../core/types/api.js";
 import type { AppServices } from "../../core/types/container.js";
 import { moduleTypeSchema, ruleStatusSchema, ruleKindSchema, conditionOperatorSchema, actionTypeSchema, selectorTypeSchema } from "../../domain/models/enums.js";
 import { errorResponseSchemas, paginationMetaSchema, successResponseSchema, toSwaggerSchema } from "../../core/docs/swagger.js";
+import { matchStakesBuilderConfigInputSchema, ruleBuilderTypeSchema } from "./builder-types.js";
 
 const listRuleSetsQuerySchema = z.object({
   module: moduleTypeSchema.optional(),
@@ -69,7 +70,9 @@ const createRuleSetVersionSchema = z.object({
   effectiveTo: z.string().datetime().nullable().optional(),
   isActive: z.boolean().optional().default(true),
   summaryJson: z.record(z.string(), z.unknown()).nullable().optional(),
-  rules: z.array(ruleSchema).min(1)
+  builderType: ruleBuilderTypeSchema.nullable().optional(),
+  builderConfig: z.union([matchStakesBuilderConfigInputSchema, z.record(z.string(), z.unknown())]).nullable().optional(),
+  rules: z.array(ruleSchema).min(1).optional()
 });
 
 const updateRuleSetVersionSchema = z
@@ -131,6 +134,8 @@ const ruleSetVersionResponseSchema = z.object({
   effectiveTo: z.string().nullable(),
   isActive: z.boolean(),
   summaryJson: z.unknown(),
+  builderType: z.string().nullable(),
+  builderConfig: z.unknown().nullable(),
   createdAt: z.string(),
   rules: z.array(ruleResponseSchema)
 });
@@ -258,6 +263,8 @@ export async function registerRuleRoutes(app: FastifyInstance, services: AppServ
       schema: {
         tags: ["Rules"],
         summary: "Create rule set version",
+        description:
+          "Supports raw mode (`rules`) and MATCH_STAKES builder mode (`builderType` + `builderConfig`). Do not send both modes together.",
         params: toSwaggerSchema(ruleSetIdParamSchema),
         body: toSwaggerSchema(createRuleSetVersionSchema),
         response: {
@@ -277,7 +284,9 @@ export async function registerRuleRoutes(app: FastifyInstance, services: AppServ
         effectiveTo: input.effectiveTo ?? null,
         isActive: input.isActive,
         summaryJson: input.summaryJson ?? null,
-        rules: input.rules.map((rule) => ({
+        builderType: input.builderType,
+        builderConfig: input.builderConfig,
+        rules: input.rules?.map((rule) => ({
           code: rule.code,
           name: rule.name,
           description: rule.description ?? null,

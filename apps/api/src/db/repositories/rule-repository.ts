@@ -64,6 +64,8 @@ export interface CreateRuleSetVersionInput {
   effectiveTo: string | null;
   isActive: boolean;
   summaryJson: unknown;
+  builderType: string | null;
+  builderConfig: unknown | null;
   rules: CreateRuleVersionRuleInput[];
 }
 
@@ -80,7 +82,7 @@ function mapRuleSet(row: {
 }): RuleSetRecord {
   return {
     id: row.id,
-    module: row.module,
+    module: row.module as ModuleType,
     code: row.code,
     name: row.name,
     description: row.description,
@@ -298,11 +300,13 @@ export class RuleRepository {
       effective_to: string | null;
       is_active: boolean;
       summary_json: unknown;
+      builder_type: string | null;
+      builder_config_json: unknown | null;
       created_at: string;
     }>(
       `
       SELECT id, rule_set_id, version_no, participant_count_min, participant_count_max, effective_from, effective_to, is_active,
-             summary_json, created_at
+             summary_json, builder_type, builder_config_json, created_at
       FROM rule_set_versions
       WHERE rule_set_id = $1
       ORDER BY version_no DESC
@@ -320,6 +324,8 @@ export class RuleRepository {
       effectiveTo: row.effective_to,
       isActive: row.is_active,
       summaryJson: row.summary_json,
+      builderType: row.builder_type,
+      builderConfig: row.builder_config_json,
       createdAt: row.created_at,
       rules: []
     }));
@@ -343,15 +349,18 @@ export class RuleRepository {
       effective_to: string | null;
       is_active: boolean;
       summary_json: unknown;
+      builder_type: string | null;
+      builder_config_json: unknown | null;
       created_at: string;
     }>(
       `
       INSERT INTO rule_set_versions(
-        rule_set_id, version_no, participant_count_min, participant_count_max, effective_from, effective_to, is_active, summary_json
+        rule_set_id, version_no, participant_count_min, participant_count_max, effective_from, effective_to, is_active, summary_json,
+        builder_type, builder_config_json
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING id, rule_set_id, version_no, participant_count_min, participant_count_max, effective_from, effective_to,
-                is_active, summary_json, created_at
+                is_active, summary_json, builder_type, builder_config_json, created_at
       `,
       [
         input.ruleSetId,
@@ -361,7 +370,9 @@ export class RuleRepository {
         input.effectiveFrom,
         input.effectiveTo,
         input.isActive,
-        input.summaryJson
+        input.summaryJson,
+        input.builderType,
+        input.builderConfig
       ]
     );
 
@@ -445,11 +456,13 @@ export class RuleRepository {
       effective_to: string | null;
       is_active: boolean;
       summary_json: unknown;
+      builder_type: string | null;
+      builder_config_json: unknown | null;
       created_at: string;
     }>(
       `
       SELECT id, rule_set_id, version_no, participant_count_min, participant_count_max, effective_from, effective_to,
-             is_active, summary_json, created_at
+             is_active, summary_json, builder_type, builder_config_json, created_at
       FROM rule_set_versions
       WHERE id = $1 AND rule_set_id = $2
       LIMIT 1
@@ -563,6 +576,8 @@ export class RuleRepository {
       effectiveTo: versionRow.effective_to,
       isActive: versionRow.is_active,
       summaryJson: versionRow.summary_json,
+      builderType: versionRow.builder_type,
+      builderConfig: versionRow.builder_config_json,
       createdAt: versionRow.created_at,
       rules
     };

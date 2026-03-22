@@ -3,6 +3,8 @@ import { AppError } from "../../src/core/errors/app-error.js";
 import type { ModuleType } from "../../src/domain/models/enums.js";
 import type { AppServices } from "../../src/core/types/container.js";
 import { randomUUID } from "node:crypto";
+import { MatchStakesBuilderValidationService } from "../../src/modules/rules/match-stakes-builder-validation.service.js";
+import { MatchStakesBuilderCompileService } from "../../src/modules/rules/match-stakes-builder-compile.service.js";
 
 interface Player {
   id: string;
@@ -61,6 +63,8 @@ export function createMockServices(): AppServices {
   const presets = new Map<ModuleType, any>();
   const matches = new Map<string, MatchRecord>();
   const manualGroupFundTransactions: ManualGroupFundTransaction[] = [];
+  const builderValidationService = new MatchStakesBuilderValidationService();
+  const builderCompileService = new MatchStakesBuilderCompileService();
 
   const now = new Date().toISOString();
 
@@ -124,6 +128,8 @@ export function createMockServices(): AppServices {
         effectiveTo: null,
         isActive: true,
         summaryJson: null,
+        builderType: null,
+        builderConfig: null,
         createdAt: now,
         rules: []
       }
@@ -151,6 +157,8 @@ export function createMockServices(): AppServices {
         effectiveTo: null,
         isActive: true,
         summaryJson: null,
+        builderType: null,
+        builderConfig: null,
         rules: []
       }
     ]
@@ -300,6 +308,26 @@ export function createMockServices(): AppServices {
           throw new AppError(404, "RULE_SET_NOT_FOUND", "Rule set not found");
         }
 
+        if (input.builderType && input.rules) {
+          throw new AppError(400, "RULE_BUILDER_INVALID_CONFIG", "Cannot combine builder mode with raw rules");
+        }
+
+        let persistedRules = input.rules ?? [];
+        let persistedBuilderConfig = input.builderConfig ?? null;
+        let persistedBuilderType = input.builderType ?? null;
+
+        if (input.builderType === "MATCH_STAKES_PAYOUT") {
+          const normalized = builderValidationService.validate({
+            module: item.module,
+            participantCountMin: input.participantCountMin,
+            participantCountMax: input.participantCountMax,
+            builderConfig: input.builderConfig
+          });
+          persistedBuilderConfig = normalized;
+          persistedRules = builderCompileService.compile(normalized);
+          persistedBuilderType = input.builderType;
+        }
+
         const version = {
           id: uid("version"),
           ruleSetId,
@@ -310,8 +338,10 @@ export function createMockServices(): AppServices {
           effectiveTo: input.effectiveTo,
           isActive: input.isActive,
           summaryJson: input.summaryJson,
+          builderType: persistedBuilderType,
+          builderConfig: persistedBuilderConfig,
           createdAt: new Date().toISOString(),
-          rules: input.rules
+          rules: persistedRules
         };
 
         item.versions.unshift(version);

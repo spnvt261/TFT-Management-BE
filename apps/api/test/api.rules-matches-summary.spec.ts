@@ -33,7 +33,43 @@ describe("API - rules, matches, summaries", () => {
     expect(createRuleSetResponse.statusCode).toBe(201);
     const ruleSetId = createRuleSetResponse.json().data.id;
 
-    const createVersionResponse = await app.inject({
+    const createBuilderVersionResponse = await app.inject({
+      method: "POST",
+      url: `/api/v1/rule-sets/${ruleSetId}/versions`,
+      payload: {
+        participantCountMin: 3,
+        participantCountMax: 3,
+        isActive: true,
+        builderType: "MATCH_STAKES_PAYOUT",
+        builderConfig: {
+          participantCount: 3,
+          winnerCount: 1,
+          payouts: [{ relativeRank: 1, amountVnd: 100000 }],
+          losses: [
+            { relativeRank: 2, amountVnd: 50000 },
+            { relativeRank: 3, amountVnd: 50000 }
+          ],
+          penalties: [{ absolutePlacement: 8, amountVnd: 10000 }]
+        }
+      }
+    });
+
+    expect(createBuilderVersionResponse.statusCode).toBe(201);
+    const builderVersionId = createBuilderVersionResponse.json().data.id;
+    expect(createBuilderVersionResponse.json().data.builderType).toBe("MATCH_STAKES_PAYOUT");
+    expect(createBuilderVersionResponse.json().data.builderConfig.participantCount).toBe(3);
+    expect(createBuilderVersionResponse.json().data.rules.length).toBeGreaterThan(0);
+
+    const builderDetailResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/rule-sets/${ruleSetId}/versions/${builderVersionId}`
+    });
+    expect(builderDetailResponse.statusCode).toBe(200);
+    expect(builderDetailResponse.json().data.builderType).toBe("MATCH_STAKES_PAYOUT");
+    expect(builderDetailResponse.json().data.builderConfig.participantCount).toBe(3);
+    expect(builderDetailResponse.json().data.rules.length).toBeGreaterThan(0);
+
+    const createRawVersionResponse = await app.inject({
       method: "POST",
       url: `/api/v1/rule-sets/${ruleSetId}/versions`,
       payload: {
@@ -67,14 +103,61 @@ describe("API - rules, matches, summaries", () => {
       }
     });
 
-    expect(createVersionResponse.statusCode).toBe(201);
-    const versionId = createVersionResponse.json().data.id;
+    expect(createRawVersionResponse.statusCode).toBe(201);
+    expect(createRawVersionResponse.json().data.builderType).toBeNull();
+    const versionId = createRawVersionResponse.json().data.id;
 
     const detailVersionResponse = await app.inject({
       method: "GET",
       url: `/api/v1/rule-sets/${ruleSetId}/versions/${versionId}`
     });
     expect(detailVersionResponse.statusCode).toBe(200);
+    expect(detailVersionResponse.json().data).toHaveProperty("builderType");
+    expect(detailVersionResponse.json().data).toHaveProperty("builderConfig");
+
+    const conflictModeResponse = await app.inject({
+      method: "POST",
+      url: `/api/v1/rule-sets/${ruleSetId}/versions`,
+      payload: {
+        participantCountMin: 3,
+        participantCountMax: 3,
+        builderType: "MATCH_STAKES_PAYOUT",
+        builderConfig: {
+          participantCount: 3,
+          winnerCount: 1,
+          payouts: [{ relativeRank: 1, amountVnd: 100000 }],
+          losses: [
+            { relativeRank: 2, amountVnd: 50000 },
+            { relativeRank: 3, amountVnd: 50000 }
+          ]
+        },
+        rules: [
+          {
+            code: "RAW_CONFLICT",
+            name: "Raw Conflict",
+            ruleKind: "BASE_RELATIVE_RANK",
+            conditions: [
+              {
+                conditionKey: "participantCount",
+                operator: "EQ",
+                valueJson: 3
+              }
+            ],
+            actions: [
+              {
+                actionType: "TRANSFER",
+                amountVnd: 10000,
+                sourceSelectorType: "PLAYER_BY_RELATIVE_RANK",
+                sourceSelectorJson: { relativeRank: 2 },
+                destinationSelectorType: "PLAYER_BY_RELATIVE_RANK",
+                destinationSelectorJson: { relativeRank: 1 }
+              }
+            ]
+          }
+        ]
+      }
+    });
+    expect(conflictModeResponse.statusCode).toBe(400);
 
     const defaultResponse = await app.inject({
       method: "GET",

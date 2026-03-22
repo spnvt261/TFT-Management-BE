@@ -86,6 +86,8 @@ type RuleKind =
   | "FUND_CONTRIBUTION"
   | "CUSTOM";
 
+type RuleBuilderType = "MATCH_STAKES_PAYOUT";
+
 type ConditionOperator = "EQ" | "NEQ" | "GT" | "GTE" | "LT" | "LTE" | "IN" | "NOT_IN" | "BETWEEN" | "CONTAINS";
 
 type SelectorType =
@@ -99,6 +101,12 @@ type SelectorType =
   | "FUND_ACCOUNT"
   | "SYSTEM_ACCOUNT"
   | "FIXED_PLAYER";
+
+type MatchStakesPenaltyDestinationSelectorType =
+  | "BEST_PARTICIPANT"
+  | "MATCH_WINNER"
+  | "FIXED_PLAYER"
+  | "FUND_ACCOUNT";
 ```
 
 ## 3. Endpoint Catalog
@@ -483,6 +491,8 @@ interface RuleSetVersionListItemDto {
   effectiveTo: string | null;
   isActive: boolean;
   summaryJson: unknown;
+  builderType: string | null;
+  builderConfig: unknown | null;
   createdAt: string;
   rules: []; // list endpoint returns empty rules here
 }
@@ -529,18 +539,42 @@ Main errors:
 
 ### POST `/api/v1/rule-sets/:ruleSetId/versions`
 
-Business purpose: create immutable rule-set version with full rules/conditions/actions.
+Business purpose: create immutable rule-set version in either raw mode (generic rules) or builder mode (business-friendly Match Stakes config compiled to generic rules).
 
 Request DTO:
 
 ```ts
+interface MatchStakesPenaltyConfig {
+  absolutePlacement: number; // 1..8
+  amountVnd: number; // positive integer
+  destinationSelectorType?: MatchStakesPenaltyDestinationSelectorType; // default BEST_PARTICIPANT
+  destinationSelectorJson?: Record<string, unknown> | null;
+  code?: string;
+  name?: string;
+  description?: string | null;
+}
+
+interface MatchStakesBuilderConfig {
+  participantCount: 3 | 4;
+  winnerCount: number; // >= 1 and < participantCount
+  payouts: Array<{ relativeRank: number; amountVnd: number }>;
+  losses: Array<{ relativeRank: number; amountVnd: number }>;
+  penalties?: MatchStakesPenaltyConfig[];
+}
+
 interface CreateRuleSetVersionRequest {
   participantCountMin: number; // 2..8
   participantCountMax: number; // 2..8
   effectiveTo?: string | null; // datetime
   isActive?: boolean; // default true
   summaryJson?: Record<string, unknown> | null;
-  rules: Array<{
+
+  // Builder mode (MATCH_STAKES only)
+  builderType?: RuleBuilderType | null; // currently supports MATCH_STAKES_PAYOUT
+  builderConfig?: MatchStakesBuilderConfig | null;
+
+  // Raw mode (backward compatible)
+  rules?: Array<{
     code: string;
     name: string;
     description?: string | null;
@@ -621,6 +655,8 @@ interface RuleSetVersionDetailDto {
   effectiveTo: string | null;
   isActive: boolean;
   summaryJson: unknown;
+  builderType: string | null;
+  builderConfig: unknown | null;
   createdAt: string;
   rules: RuleDto[];
 }
@@ -632,16 +668,34 @@ Processing flow:
 
 1. Validate rule set exists.
 2. Validate `participantCountMin <= participantCountMax`.
-3. Set `effectiveFrom = now`.
-4. Determine next `versionNo` (`max + 1`).
-5. Insert version.
-6. Insert every rule, then each rule's conditions and actions.
-7. Reload full detail and return.
+3. Determine mode:
+   - Raw mode: use `rules`.
+   - Builder mode: require `builderType` + `builderConfig`.
+   - Reject mixed payload (`rules` + builder fields together).
+4. Builder mode validation (MATCH_STAKES_PAYOUT):
+   - module must be `MATCH_STAKES`,
+   - `participantCount` supports `3` or `4`,
+   - `participantCountMin` and `participantCountMax` must equal builder `participantCount`,
+   - winner/payout/loss rank and amount constraints,
+   - payout/loss base totals must balance,
+   - penalty placement constraints (1..8).
+5. In builder mode, compile business config into deterministic generic rules/conditions/actions.
+6. Set `effectiveFrom = now`.
+7. Determine next `versionNo` (`max + 1`).
+8. Insert version metadata including `builderType` and normalized `builderConfig`.
+9. Insert compiled/raw rules with conditions and actions.
+10. Reload full detail and return.
 
 Main errors:
 
 - `404 RULE_SET_NOT_FOUND`.
 - `400 RULE_SET_VERSION_INVALID`.
+- `400 RULE_BUILDER_UNSUPPORTED_MODULE`.
+- `400 RULE_BUILDER_INVALID_CONFIG`.
+- `400 RULE_BUILDER_PAYOUT_LOSS_UNBALANCED`.
+- `400 RULE_BUILDER_PARTICIPANT_COUNT_UNSUPPORTED`.
+- `400 RULE_BUILDER_DUPLICATE_RANK`.
+- `400 RULE_BUILDER_RANK_COVERAGE_INVALID`.
 
 ### GET `/api/v1/rule-sets/:ruleSetId/versions/:versionId`
 
@@ -1345,7 +1399,22 @@ Processing flow:
 - `SYSTEM_ACCOUNT`: system holding account.
 - `FIXED_PLAYER`: explicit player id from selector json.
 
-### 6.3 Accounting safety for void
+### 6.3 Match Stakes builder compile behavior
+
+- Builder type `MATCH_STAKES_PAYOUT` compiles to generic `TRANSFER` rules.
+- Base payout/loss compile strategy is deterministic:
+  - losers are processed by ascending relative rank,
+  - each loser amount is allocated to winners in ascending winner rank until fully allocated.
+- Generated base rule codes use stable format:
+  - `BASE_LOSS_RANK_<FROM>_TO_WINNER` (single-winner case),
+  - `BASE_LOSS_RANK_<FROM>_TO_RANK_<TO>` (multi-winner case).
+- Penalties compile to subject-scoped rules with stable codes:
+  - `PENALTY_ABSOLUTE_PLACEMENT_<placement>`.
+- Default penalty destination is `BEST_PARTICIPANT` when omitted.
+- Existing settlement behavior remains unchanged:
+  - if source and destination resolve to the same account, the line is skipped.
+
+### 6.4 Accounting safety for void
 
 - Original ledger entries are never deleted.
 - Void creates a dedicated reversal batch and opposite ledger entries.
@@ -1365,6 +1434,12 @@ Processing flow:
 | `RULE_SET_VERSION_INVALID` | Invalid participant min/max |
 | `RULE_SET_VERSION_NOT_FOUND` | Rule version not found |
 | `RULE_SET_DEFAULT_NOT_FOUND` | No active default rule set for module |
+| `RULE_BUILDER_UNSUPPORTED_MODULE` | Builder used outside supported module |
+| `RULE_BUILDER_INVALID_CONFIG` | Builder config invalid or mixed mode payload |
+| `RULE_BUILDER_PAYOUT_LOSS_UNBALANCED` | Builder base payouts/losses not balanced |
+| `RULE_BUILDER_PARTICIPANT_COUNT_UNSUPPORTED` | Builder participant count not supported |
+| `RULE_BUILDER_DUPLICATE_RANK` | Duplicate rank in payouts or losses |
+| `RULE_BUILDER_RANK_COVERAGE_INVALID` | Payout/loss ranks do not fully cover participant ranks |
 | `MATCH_PARTICIPANT_COUNT_INVALID` | Participants not 3/4 |
 | `MATCH_DUPLICATE_PLAYER` | Duplicate player ids in one match |
 | `MATCH_DUPLICATE_PLACEMENT` | Duplicate TFT placements in one match |

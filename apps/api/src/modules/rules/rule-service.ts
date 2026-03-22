@@ -1,9 +1,15 @@
-import { badRequest, notFound } from "../../core/errors/app-error.js";
+import { notFound } from "../../core/errors/app-error.js";
 import type { ModuleType } from "../../domain/models/enums.js";
 import type { RepositoryBundle } from "../../db/repositories/repository-factory.js";
+import { RuleVersionCreationService } from "./rule-version-creation.service.js";
+import type { CreateRuleSetVersionRequest } from "./builder-types.js";
 
 export class RuleService {
-  public constructor(private readonly repositories: RepositoryBundle, private readonly groupId: string) {}
+  private readonly versionCreationService: RuleVersionCreationService;
+
+  public constructor(private readonly repositories: RepositoryBundle, private readonly groupId: string) {
+    this.versionCreationService = new RuleVersionCreationService(repositories, groupId);
+  }
 
   public listRuleSets(input: {
     module?: ModuleType;
@@ -62,60 +68,8 @@ export class RuleService {
     return ruleSet;
   }
 
-  public async createVersion(
-    ruleSetId: string,
-    input: {
-      participantCountMin: number;
-      participantCountMax: number;
-      effectiveFrom: string;
-      effectiveTo: string | null;
-      isActive: boolean;
-      summaryJson: unknown;
-      rules: Array<{
-        code: string;
-        name: string;
-        description: string | null;
-        ruleKind: string;
-        priority: number;
-        status: string;
-        stopProcessingOnMatch: boolean;
-        metadata: unknown;
-        conditions: Array<{ conditionKey: string; operator: string; valueJson: unknown; sortOrder: number }>;
-        actions: Array<{
-          actionType: string;
-          amountVnd: number;
-          sourceSelectorType: string;
-          sourceSelectorJson: unknown;
-          destinationSelectorType: string;
-          destinationSelectorJson: unknown;
-          descriptionTemplate: string | null;
-          sortOrder: number;
-        }>;
-      }>;
-    }
-  ) {
-    const ruleSet = await this.repositories.rules.getRuleSetById(this.groupId, ruleSetId);
-    if (!ruleSet) {
-      throw notFound("RULE_SET_NOT_FOUND", "Rule set not found");
-    }
-
-    if (input.participantCountMin > input.participantCountMax) {
-      throw badRequest(
-        "RULE_SET_VERSION_INVALID",
-        "participantCountMin must be less than or equal to participantCountMax"
-      );
-    }
-
-    return this.repositories.rules.createRuleSetVersion({
-      ruleSetId,
-      participantCountMin: input.participantCountMin,
-      participantCountMax: input.participantCountMax,
-      effectiveFrom: input.effectiveFrom,
-      effectiveTo: input.effectiveTo,
-      isActive: input.isActive,
-      summaryJson: input.summaryJson,
-      rules: input.rules
-    });
+  public createVersion(ruleSetId: string, input: CreateRuleSetVersionRequest) {
+    return this.versionCreationService.create(ruleSetId, input);
   }
 
   public async getVersion(ruleSetId: string, versionId: string) {

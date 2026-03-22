@@ -1,3 +1,5 @@
+import type { ModuleType } from "./enums.js";
+
 export interface GroupRecord {
   id: string;
   code: string;
@@ -18,7 +20,7 @@ export interface PlayerRecord {
 
 export interface RuleSetRecord {
   id: string;
-  module: string;
+  module: ModuleType;
   code: string;
   name: string;
   description: string | null;
@@ -72,6 +74,8 @@ export interface RuleSetVersionRecord {
   effectiveTo: string | null;
   isActive: boolean;
   summaryJson: unknown;
+  builderType: string | null;
+  builderConfig: unknown | null;
   createdAt: string;
   rules: RuleRecord[];
 }
