@@ -33,6 +33,8 @@ export interface MatchDetailRow {
   status: MatchStatus;
   void_reason: string | null;
   voided_at: string | null;
+  input_snapshot_json?: unknown;
+  calculation_snapshot_json?: unknown;
   created_at: string;
   updated_at: string;
 }
@@ -114,7 +116,7 @@ export class MatchRepository {
     const result = await this.db.query<MatchDetailRow>(
       `
       SELECT id, group_id, module, rule_set_id, rule_set_version_id, played_at, participant_count, status,
-             void_reason, voided_at, created_at, updated_at
+             void_reason, voided_at, input_snapshot_json, calculation_snapshot_json, created_at, updated_at
       FROM matches
       WHERE id = $1 AND group_id = $2
       LIMIT 1

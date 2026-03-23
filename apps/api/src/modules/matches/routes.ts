@@ -6,20 +6,38 @@ import type { AppServices } from "../../core/types/container.js";
 import { matchStatusSchema, moduleTypeSchema } from "../../domain/models/enums.js";
 import { errorResponseSchemas, paginationMetaSchema, successResponseSchema, toSwaggerSchema } from "../../core/docs/swagger.js";
 
-const createMatchSchema = z.object({
-  module: moduleTypeSchema,
-  ruleSetId: uuidSchema,
-  ruleSetVersionId: uuidSchema.optional(),
-  note: z.string().max(4000).nullable().optional(),
-  participants: z
+const participantInputSchema = z.object({
+  playerId: uuidSchema,
+  tftPlacement: z.number().int()
+});
+
+const createMatchConfirmationSchema = z.object({
+  mode: z.enum(["ENGINE", "MANUAL_ADJUSTED"]),
+  participantNets: z
     .array(
       z.object({
         playerId: uuidSchema,
-        tftPlacement: z.number().int()
+        netVnd: z.number().int()
       })
     )
-    .min(3)
-    .max(4)
+    .optional(),
+  overrideReason: z.string().max(2000).nullable().optional()
+});
+
+const previewMatchSchema = z.object({
+  module: moduleTypeSchema,
+  ruleSetId: uuidSchema,
+  note: z.string().max(4000).nullable().optional(),
+  participants: z.array(participantInputSchema).min(3).max(4)
+});
+
+const createMatchSchema = z.object({
+  module: moduleTypeSchema,
+  ruleSetId: uuidSchema,
+  ruleSetVersionId: uuidSchema,
+  note: z.string().max(4000).nullable().optional(),
+  participants: z.array(participantInputSchema).min(3).max(4),
+  confirmation: createMatchConfirmationSchema.optional()
 });
 
 const listMatchesQuerySchema = z.object({
@@ -77,6 +95,60 @@ const settlementResponseSchema = z.object({
   lines: z.array(settlementLineResponseSchema)
 });
 
+const previewSettlementLineSchema = z.object({
+  lineNo: z.number().int().positive(),
+  ruleId: uuidSchema.nullable(),
+  ruleCode: z.string(),
+  ruleName: z.string(),
+  sourceAccountId: uuidSchema,
+  destinationAccountId: uuidSchema,
+  sourcePlayerId: uuidSchema.nullable(),
+  sourcePlayerName: z.string().nullable(),
+  destinationPlayerId: uuidSchema.nullable(),
+  destinationPlayerName: z.string().nullable(),
+  amountVnd: z.number().int(),
+  reasonText: z.string(),
+  metadata: z.unknown()
+});
+
+const previewSettlementSchema = z.object({
+  totalTransferVnd: z.number().int(),
+  totalFundInVnd: z.number().int(),
+  totalFundOutVnd: z.number().int(),
+  engineVersion: z.string(),
+  ruleSnapshot: z.unknown(),
+  resultSnapshot: z.unknown(),
+  lines: z.array(previewSettlementLineSchema)
+});
+
+const previewMatchParticipantResponseSchema = z.object({
+  playerId: uuidSchema,
+  playerName: z.string(),
+  tftPlacement: z.number().int(),
+  relativeRank: z.number().int(),
+  suggestedNetVnd: z.number().int()
+});
+
+const previewMatchResponseSchema = z.object({
+  module: moduleTypeSchema,
+  note: z.string().nullable(),
+  ruleSet: z.object({
+    id: uuidSchema,
+    name: z.string(),
+    module: moduleTypeSchema
+  }),
+  ruleSetVersion: z.object({
+    id: uuidSchema,
+    versionNo: z.number().int().positive(),
+    participantCountMin: z.number().int(),
+    participantCountMax: z.number().int(),
+    effectiveFrom: z.string(),
+    effectiveTo: z.string().nullable()
+  }),
+  participants: z.array(previewMatchParticipantResponseSchema),
+  settlementPreview: previewSettlementSchema
+});
+
 const matchListItemResponseSchema = z.object({
   id: uuidSchema,
   module: moduleTypeSchema,
@@ -88,6 +160,9 @@ const matchListItemResponseSchema = z.object({
   ruleSetVersionNo: z.number().int().positive(),
   notePreview: z.string().nullable(),
   status: z.string(),
+  confirmationMode: z.enum(["ENGINE", "MANUAL_ADJUSTED"]),
+  overrideReason: z.string().nullable(),
+  manualAdjusted: z.boolean(),
   participants: z.array(matchParticipantResponseSchema),
   totalTransferVnd: z.number().int(),
   totalFundInVnd: z.number().int(),
@@ -102,6 +177,9 @@ const matchDetailResponseSchema = z.object({
   participantCount: z.number().int(),
   status: z.string(),
   note: z.string().nullable(),
+  confirmationMode: z.enum(["ENGINE", "MANUAL_ADJUSTED"]),
+  overrideReason: z.string().nullable(),
+  manualAdjusted: z.boolean(),
   ruleSet: z.object({
     id: uuidSchema,
     name: z.string(),
@@ -118,6 +196,7 @@ const matchDetailResponseSchema = z.object({
     })
     .nullable(),
   participants: z.array(matchParticipantResponseSchema),
+  engineCalculationSnapshot: z.unknown().nullable(),
   settlement: settlementResponseSchema.nullable(),
   voidReason: z.string().nullable().optional(),
   voidedAt: z.string().nullable().optional(),
@@ -132,6 +211,9 @@ const createMatchResponseSchema = z.object({
   participantCount: z.number().int(),
   status: z.string(),
   note: z.string().nullable().optional(),
+  confirmationMode: z.enum(["ENGINE", "MANUAL_ADJUSTED"]),
+  overrideReason: z.string().nullable(),
+  manualAdjusted: z.boolean(),
   ruleSet: z
     .object({
       id: uuidSchema,
@@ -151,6 +233,7 @@ const createMatchResponseSchema = z.object({
     .nullable()
     .optional(),
   participants: z.array(matchParticipantResponseSchema),
+  engineCalculationSnapshot: z.unknown().nullable().optional(),
   settlement: settlementResponseSchema.nullable().optional(),
   voidReason: z.string().nullable().optional(),
   voidedAt: z.string().nullable().optional(),
@@ -167,11 +250,30 @@ const voidMatchResponseSchema = z.object({
 
 export async function registerMatchRoutes(app: FastifyInstance, services: AppServices): Promise<void> {
   app.post(
+    "/matches/preview",
+    {
+      schema: {
+        tags: ["Matches"],
+        summary: "Preview settlement for a match without persistence",
+        body: toSwaggerSchema(previewMatchSchema),
+        response: {
+          200: successResponseSchema(previewMatchResponseSchema),
+          ...errorResponseSchemas
+        }
+      }
+    },
+    async (request) => {
+      const input = previewMatchSchema.parse(request.body);
+      return ok(await services.matches.previewMatch(input));
+    }
+  );
+
+  app.post(
     "/matches",
     {
       schema: {
         tags: ["Matches"],
-        summary: "Create match and post settlement ledger",
+        summary: "Create match from engine or manually confirmed participant net amounts",
         body: toSwaggerSchema(createMatchSchema),
         response: {
           201: successResponseSchema(createMatchResponseSchema),

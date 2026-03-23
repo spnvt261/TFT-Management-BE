@@ -357,6 +357,7 @@ describe("API - rules, matches, summaries", () => {
     const duplicatePlayerPayload = {
       module: "MATCH_STAKES",
       ruleSetId: "20000000-0000-4000-8000-000000000001",
+      ruleSetVersionId: "30000000-0000-4000-8000-000000000001",
       participants: [
         { playerId: "10000000-0000-4000-8000-000000000001", tftPlacement: 1 },
         { playerId: "10000000-0000-4000-8000-000000000001", tftPlacement: 2 },
@@ -393,6 +394,7 @@ describe("API - rules, matches, summaries", () => {
       payload: {
         module: "MATCH_STAKES",
         ruleSetId: "20000000-0000-4000-8000-000000000001",
+        ruleSetVersionId: "30000000-0000-4000-8000-000000000001",
         participants: [
           { playerId: "10000000-0000-4000-8000-000000000001", tftPlacement: 1 },
           { playerId: "10000000-0000-4000-8000-000000000002", tftPlacement: 4 },

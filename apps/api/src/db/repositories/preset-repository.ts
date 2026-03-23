@@ -30,12 +30,26 @@ export class PresetRepository {
     );
 
     const row = result.rows[0];
+    const rawLastSelected = row?.last_selected_player_ids_json;
+    let lastSelectedPlayerIds: string[] = [];
+    if (Array.isArray(rawLastSelected)) {
+      lastSelectedPlayerIds = rawLastSelected;
+    } else if (typeof rawLastSelected === "string") {
+      try {
+        const parsed = JSON.parse(rawLastSelected) as unknown;
+        if (Array.isArray(parsed)) {
+          lastSelectedPlayerIds = parsed.filter((item): item is string => typeof item === "string");
+        }
+      } catch {
+        lastSelectedPlayerIds = [];
+      }
+    }
 
     return {
       module,
       lastRuleSetId: row?.last_rule_set_id ?? null,
       lastRuleSetVersionId: row?.last_rule_set_version_id ?? null,
-      lastSelectedPlayerIds: row?.last_selected_player_ids_json ?? [],
+      lastSelectedPlayerIds,
       lastParticipantCount: row?.last_participant_count ?? null,
       lastUsedAt: row?.last_used_at ?? null
     };
@@ -71,7 +85,7 @@ export class PresetRepository {
         input.module,
         input.lastRuleSetId,
         input.lastRuleSetVersionId,
-        input.lastSelectedPlayerIds,
+        JSON.stringify(input.lastSelectedPlayerIds),
         input.lastParticipantCount,
         input.lastUsedAt ?? null
       ]

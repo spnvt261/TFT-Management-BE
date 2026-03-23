@@ -125,7 +125,8 @@ type MatchStakesPenaltyDestinationSelectorType =
 | GET | `/api/v1/rule-sets/:ruleSetId` | Rule set detail |
 | PATCH | `/api/v1/rule-sets/:ruleSetId` | Edit rule (creates new immutable version) |
 | GET | `/api/v1/rule-sets/default/by-module/:module` | Default rule set by module |
-| POST | `/api/v1/matches` | Create match, calculate settlement, post ledger |
+| POST | `/api/v1/matches/preview` | Preview settlement (no persistence) |
+| POST | `/api/v1/matches` | Create match from engine/manual confirmed nets, then post ledger |
 | GET | `/api/v1/matches` | List matches |
 | GET | `/api/v1/matches/:matchId` | Match detail |
 | POST | `/api/v1/matches/:matchId/void` | Void match + reversal ledger entries |
@@ -748,9 +749,105 @@ Main errors:
 
 ## 5.4 Match APIs
 
+### POST `/api/v1/matches/preview`
+
+Business purpose: step 1 of match flow. Validate input and return calculated settlement preview without persistence.
+
+Request DTO:
+
+```ts
+interface PreviewMatchRequest {
+  module: ModuleType;
+  ruleSetId: string; // uuid
+  note?: string | null;
+  participants: Array<{
+    playerId: string; // uuid
+    tftPlacement: number; // integer 1..8
+  }>; // size must be 3 or 4
+}
+```
+
+Response DTO:
+
+```ts
+interface PreviewMatchParticipantDto {
+  playerId: string;
+  playerName: string;
+  tftPlacement: number;
+  relativeRank: number;
+  suggestedNetVnd: number;
+}
+
+interface PreviewSettlementLineDto {
+  lineNo: number;
+  ruleId: string | null;
+  ruleCode: string;
+  ruleName: string;
+  sourceAccountId: string;
+  destinationAccountId: string;
+  sourcePlayerId: string | null;
+  sourcePlayerName: string | null;
+  destinationPlayerId: string | null;
+  destinationPlayerName: string | null;
+  amountVnd: number;
+  reasonText: string;
+  metadata: unknown;
+}
+
+interface PreviewSettlementDto {
+  totalTransferVnd: number;
+  totalFundInVnd: number;
+  totalFundOutVnd: number;
+  engineVersion: string;
+  ruleSnapshot: unknown;
+  resultSnapshot: unknown;
+  lines: PreviewSettlementLineDto[];
+}
+
+ApiSuccessResponse<{
+  module: ModuleType;
+  note: string | null;
+  ruleSet: { id: string; name: string; module: ModuleType };
+  ruleSetVersion: {
+    id: string;
+    versionNo: number;
+    participantCountMin: number;
+    participantCountMax: number;
+    effectiveFrom: string;
+    effectiveTo: string | null;
+  };
+  participants: PreviewMatchParticipantDto[];
+  settlementPreview: PreviewSettlementDto;
+}>;
+```
+
+Processing flow:
+
+1. Validate participants:
+   - count must be 3 or 4,
+   - unique `playerId`,
+   - unique `tftPlacement`,
+   - each placement in `1..8`.
+2. Verify all participants are active members of current group.
+3. Load rule set and verify module matches request.
+4. Resolve latest applicable active version (same rule set, effective window, participant range).
+5. Build context and evaluate rule engine.
+6. Return preview payload only (no match, settlement, ledger, or audit inserts).
+
+Main errors:
+
+- `400 MATCH_PARTICIPANT_COUNT_INVALID`
+- `400 MATCH_DUPLICATE_PLAYER`
+- `400 MATCH_DUPLICATE_PLACEMENT`
+- `400 MATCH_PLACEMENT_INVALID`
+- `404 RULE_SET_NOT_FOUND`
+- `422 MATCH_PLAYERS_INVALID`
+- `422 MATCH_RULE_SET_MODULE_MISMATCH`
+- `422 RULE_SET_VERSION_NOT_APPLICABLE`
+
 ### POST `/api/v1/matches`
 
-Business purpose: core business API. Creates a match, evaluates rules, posts ledger entries, updates presets, and writes audit log.
+Business purpose: step 2 of match flow. Create match from either pure engine output or manually confirmed per-player net amounts.
 
 Request DTO:
 
@@ -758,12 +855,20 @@ Request DTO:
 interface CreateMatchRequest {
   module: ModuleType;
   ruleSetId: string; // uuid
-  ruleSetVersionId?: string; // optional explicit version
+  ruleSetVersionId: string; // required, use preview result
   note?: string | null;
   participants: Array<{
     playerId: string; // uuid
     tftPlacement: number; // integer 1..8
   }>; // size must be 3 or 4
+  confirmation?: {
+    mode: "ENGINE" | "MANUAL_ADJUSTED";
+    participantNets?: Array<{
+      playerId: string;
+      netVnd: number; // integer, can be zero
+    }>;
+    overrideReason?: string | null;
+  };
 }
 ```
 
@@ -777,6 +882,9 @@ ApiSuccessResponse<{
   participantCount: number;
   status: string;
   note?: string | null;
+  confirmationMode: "ENGINE" | "MANUAL_ADJUSTED";
+  overrideReason: string | null;
+  manualAdjusted: boolean;
   ruleSet?: { id: string; name: string; module: ModuleType };
   ruleSetVersion?: {
     id: string;
@@ -787,6 +895,7 @@ ApiSuccessResponse<{
     effectiveTo: string | null;
   } | null;
   participants: MatchParticipantDto[];
+  engineCalculationSnapshot?: unknown | null;
   settlement?: SettlementDto | null;
   voidReason?: string | null;
   voidedAt?: string | null;
@@ -797,30 +906,20 @@ ApiSuccessResponse<{
 
 Processing flow:
 
-1. Validate participants:
-   - count must be 3 or 4,
-   - unique `playerId`,
-   - unique `tftPlacement`,
-   - each placement in `1..8`.
-2. Start DB transaction.
-3. Verify all participants are active members of current group.
-4. Load rule set and verify module matches request.
-5. Resolve applicable active rule version (participant count + effective window + optional explicit version id).
-6. Build rule-engine context:
-   - sort participants by `tftPlacement`,
-   - compute `relativeRank`.
-7. Evaluate rules:
-   - only active rules, ordered by `priority`,
-   - evaluate conditions (`participantCount`, `module`, relative/absolute rank, placement set),
-   - resolve account selectors,
-   - produce settlement lines + net summary.
-8. Build ledger posting plan from settlement lines.
-9. Persist match, participants, optional note.
-10. Persist settlement summary + settlement lines.
-11. Create ledger batch and ledger entries.
-12. Upsert recent preset by module.
-13. Insert audit log (`CREATE`).
-14. Return full match detail payload.
+1. Validate participants and active membership.
+2. Validate rule set and module.
+3. Resolve exact applicable active rule set version using `ruleSetVersionId`.
+4. Evaluate engine result first (always), keep it for audit snapshot.
+5. Confirmation mode:
+   - `ENGINE` (default when omitted): use engine result as final result.
+   - `MANUAL_ADJUSTED`: validate `participantNets`, rebuild final settlement lines deterministically from player net amounts.
+6. Persist both original and final data:
+   - `matches.input_snapshot_json`: request payload.
+   - `matches.calculation_snapshot_json`: original engine result.
+   - `match_settlements.result_snapshot_json`: final confirmed snapshot + confirmation metadata.
+7. Persist final settlement lines and post ledger entries from final lines.
+8. Upsert recent preset and write audit log.
+9. Return match detail.
 
 Main errors:
 
@@ -828,6 +927,7 @@ Main errors:
 - `400 MATCH_DUPLICATE_PLAYER`
 - `400 MATCH_DUPLICATE_PLACEMENT`
 - `400 MATCH_PLACEMENT_INVALID`
+- `400 MATCH_CONFIRMATION_INVALID`
 - `404 RULE_SET_NOT_FOUND`
 - `422 MATCH_PLAYERS_INVALID`
 - `422 MATCH_RULE_SET_MODULE_MISMATCH`
@@ -867,6 +967,9 @@ interface MatchListItemDto {
   ruleSetVersionNo: number;
   notePreview: string | null; // first 120 chars
   status: string;
+  confirmationMode: "ENGINE" | "MANUAL_ADJUSTED";
+  overrideReason: string | null;
+  manualAdjusted: boolean;
   participants: MatchParticipantDto[];
   totalTransferVnd: number;
   totalFundInVnd: number;
@@ -881,7 +984,8 @@ Processing flow:
 
 1. Query match rows by filters + pagination.
 2. For each match, load participants, settlement totals, rule set name, note preview.
-3. Return aggregated list + meta.
+3. Derive `confirmationMode`, `overrideReason`, and `manualAdjusted` from settlement result snapshot.
+4. Return aggregated list + meta.
 
 ### GET `/api/v1/matches/:matchId`
 
@@ -905,6 +1009,9 @@ ApiSuccessResponse<{
   participantCount: number;
   status: string;
   note: string | null;
+  confirmationMode: "ENGINE" | "MANUAL_ADJUSTED";
+  overrideReason: string | null;
+  manualAdjusted: boolean;
   ruleSet: { id: string; name: string; module: ModuleType };
   ruleSetVersion: {
     id: string;
@@ -915,6 +1022,7 @@ ApiSuccessResponse<{
     effectiveTo: string | null;
   } | null;
   participants: MatchParticipantDto[];
+  engineCalculationSnapshot: unknown | null;
   settlement: SettlementDto | null;
   voidReason?: string | null;
   voidedAt?: string | null;
@@ -927,7 +1035,8 @@ Processing flow:
 
 1. Verify match exists in current group.
 2. Load participants, note, settlement lines, rule set, rule version detail.
-3. Build and return full DTO.
+3. Include confirmation metadata and original engine snapshot for audit screens.
+4. Build and return full DTO.
 
 Main errors:
 
@@ -1334,7 +1443,7 @@ Processing flow:
 
 ## 6. Core Business Logic Notes
 
-### 6.1 Rule engine behavior used by match creation
+### 6.1 Rule engine behavior used by preview and match creation
 
 1. Rules are sorted by priority ascending.
 2. Inactive rules are skipped.
@@ -1406,6 +1515,7 @@ Processing flow:
 | `MATCH_DUPLICATE_PLAYER` | Duplicate player ids in one match |
 | `MATCH_DUPLICATE_PLACEMENT` | Duplicate TFT placements in one match |
 | `MATCH_PLACEMENT_INVALID` | Placement out of range or non-integer |
+| `MATCH_CONFIRMATION_INVALID` | Manual confirmation payload (participant nets/mode) is invalid |
 | `MATCH_PLAYERS_INVALID` | Participant inactive or outside group |
 | `MATCH_RULE_SET_MODULE_MISMATCH` | Rule set module mismatch |
 | `RULE_SET_VERSION_NOT_APPLICABLE` | No active version for participant/time |

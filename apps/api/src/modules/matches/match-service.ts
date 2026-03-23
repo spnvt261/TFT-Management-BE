@@ -2,22 +2,34 @@ import type { Pool } from "pg";
 import { badRequest, notFound, unprocessable } from "../../core/errors/app-error.js";
 import { withTransaction } from "../../db/postgres/transaction.js";
 import { createRepositories, type RepositoryBundle } from "../../db/repositories/repository-factory.js";
-import { RuleEngineService } from "../../domain/services/rule-engine/rule-engine.service.js";
 import { LedgerPostingService } from "../../domain/services/ledger-posting/ledger-posting.service.js";
 import type { MatchStatus, ModuleType } from "../../domain/models/enums.js";
-import { AccountResolutionHelper } from "../../db/repositories/account-resolution-helper.js";
-import { AccountRepository } from "../../db/repositories/account-repository.js";
+import type { EvaluatedSettlement } from "../../domain/services/rule-engine/rule-engine.service.js";
+import type { SettlementLineDraft } from "../../domain/models/records.js";
+import {
+  MatchCalculationService,
+  MATCH_ENGINE_VERSION,
+  type MatchConfirmationInput,
+  type MatchConfirmationMode,
+  type MatchParticipantInput
+} from "./match-calculation.service.js";
+
+export interface PreviewMatchInput {
+  module: ModuleType;
+  playedAt?: string;
+  ruleSetId: string;
+  note?: string | null;
+  participants: MatchParticipantInput[];
+}
 
 export interface CreateMatchInput {
   module: ModuleType;
   playedAt?: string;
   ruleSetId: string;
-  ruleSetVersionId?: string;
+  ruleSetVersionId: string;
   note?: string | null;
-  participants: Array<{
-    playerId: string;
-    tftPlacement: number;
-  }>;
+  participants: MatchParticipantInput[];
+  confirmation?: MatchConfirmationInput;
 }
 
 export class MatchService {
@@ -27,121 +39,161 @@ export class MatchService {
     private readonly groupId: string
   ) {}
 
-  public async createMatch(input: CreateMatchInput) {
-    this.validateParticipants(input.participants);
+  public async previewMatch(input: PreviewMatchInput) {
     const playedAt = input.playedAt ?? new Date().toISOString();
+    const calculation = new MatchCalculationService(this.repositories, this.groupId);
 
-    return withTransaction(this.pool, async (tx) => {
-      const txRepositories = createRepositories(tx);
+    const { ruleSet, playersById } = await calculation.validateCreateOrPreviewInput({
+      module: input.module,
+      ruleSetId: input.ruleSetId,
+      participants: input.participants
+    });
 
-      const playerIds = input.participants.map((item) => item.playerId);
-      const activePlayers = await txRepositories.players.findActiveByIds(this.groupId, playerIds);
-      if (activePlayers.length !== input.participants.length) {
-        throw unprocessable("MATCH_PLAYERS_INVALID", "One or more participants are inactive or not in the group");
-      }
+    const ruleVersion = await calculation.resolveApplicableRuleSetVersion({
+      ruleSetId: input.ruleSetId,
+      module: input.module,
+      participantCount: input.participants.length,
+      playedAt
+    });
 
-      const ruleSet = await txRepositories.rules.getRuleSetById(this.groupId, input.ruleSetId);
-      if (!ruleSet) {
-        throw notFound("RULE_SET_NOT_FOUND", "Rule set not found");
-      }
+    const context = calculation.buildMatchCalculationContext({
+      module: input.module,
+      participants: input.participants,
+      playedAt,
+      ruleVersion
+    });
+    const evaluated = await calculation.evaluateMatchSettlement(context);
 
-      if (ruleSet.module !== input.module) {
-        throw unprocessable("MATCH_RULE_SET_MODULE_MISMATCH", "Rule set module does not match request module");
-      }
-
-      const ruleVersion = await txRepositories.rules.resolveVersionForMatch({
-        ruleSetId: input.ruleSetId,
-        module: input.module,
-        participantCount: input.participants.length,
-        playedAt,
-        versionId: input.ruleSetVersionId
-      });
-
-      if (!ruleVersion) {
-        throw unprocessable(
-          "RULE_SET_VERSION_NOT_APPLICABLE",
-          "No applicable rule set version for participant count/effective window"
-        );
-      }
-
-      const accountResolutionHelper = new AccountResolutionHelper(new AccountRepository(tx));
-      const ruleEngine = new RuleEngineService(accountResolutionHelper);
-      const ledgerPosting = new LedgerPostingService();
-
-      const context = RuleEngineService.buildContext({
-        groupId: this.groupId,
-        module: input.module,
-        participantCount: input.participants.length,
-        playedAt,
-        participants: input.participants,
-        version: ruleVersion
-      });
-
-      const evaluated = await ruleEngine.evaluate(context);
-      const postingPlan = ledgerPosting.buildPostingPlan(evaluated.lines);
-
-      const match = await txRepositories.matches.createMatch({
-        groupId: this.groupId,
-        module: input.module,
-        ruleSetId: input.ruleSetId,
-        ruleSetVersionId: ruleVersion.id,
-        playedAt,
-        participantCount: input.participants.length,
-        status: "POSTED",
-        inputSnapshot: {
-          ...input,
-          playedAt
-        },
-        calculationSnapshot: {
-          ruleVersionId: ruleVersion.id,
-          summary: evaluated.summary
-        }
-      });
-
-      const participantRows = context.participants.map((participant) => ({
+    return {
+      module: input.module,
+      note: input.note ?? null,
+      ruleSet: {
+        id: ruleSet.id,
+        name: ruleSet.name,
+        module: ruleSet.module
+      },
+      ruleSetVersion: {
+        id: ruleVersion.id,
+        versionNo: ruleVersion.versionNo,
+        participantCountMin: ruleVersion.participantCountMin,
+        participantCountMax: ruleVersion.participantCountMax,
+        effectiveFrom: ruleVersion.effectiveFrom,
+        effectiveTo: ruleVersion.effectiveTo
+      },
+      participants: context.participants.map((participant) => ({
         playerId: participant.playerId,
+        playerName: playersById.get(participant.playerId)?.displayName ?? participant.playerId,
         tftPlacement: participant.tftPlacement,
         relativeRank: participant.relativeRank,
-        isWinnerAmongParticipants: participant.relativeRank === 1,
-        settlementNetVnd: evaluated.summary.netByPlayer[participant.playerId] ?? 0
-      }));
+        suggestedNetVnd: evaluated.summary.netByPlayer[participant.playerId] ?? 0
+      })),
+      settlementPreview: this.toPreviewSettlement(evaluated, {
+        ruleSet: {
+          id: ruleSet.id,
+          name: ruleSet.name,
+          module: ruleSet.module
+        },
+        ruleVersion: {
+          id: ruleVersion.id,
+          versionNo: ruleVersion.versionNo,
+          participantCountMin: ruleVersion.participantCountMin,
+          participantCountMax: ruleVersion.participantCountMax,
+          effectiveFrom: ruleVersion.effectiveFrom,
+          effectiveTo: ruleVersion.effectiveTo
+        },
+        playersById
+      })
+    };
+  }
 
-      await txRepositories.matches.insertParticipants(match.id, participantRows);
+  public async createMatch(input: CreateMatchInput) {
+    const playedAt = input.playedAt ?? new Date().toISOString();
 
-      if (input.note && input.note.trim().length > 0) {
-        await txRepositories.matches.upsertNote(match.id, input.note.trim());
+    const matchId = await withTransaction(this.pool, async (tx) => {
+      const txRepositories = createRepositories(tx);
+      const calculation = new MatchCalculationService(txRepositories, this.groupId);
+      const { ruleSet, playersById } = await calculation.validateCreateOrPreviewInput({
+        module: input.module,
+        ruleSetId: input.ruleSetId,
+        participants: input.participants
+      });
+
+      const ruleVersion = await calculation.resolveApplicableRuleSetVersion({
+        ruleSetId: input.ruleSetId,
+        module: input.module,
+        participantCount: input.participants.length,
+        playedAt,
+        ruleSetVersionId: input.ruleSetVersionId
+      });
+
+      const context = calculation.buildMatchCalculationContext({
+        module: input.module,
+        participants: input.participants,
+        playedAt,
+        ruleVersion
+      });
+      const engineEvaluated = await calculation.evaluateMatchSettlement(context);
+
+      const confirmationMode: MatchConfirmationMode = input.confirmation?.mode ?? "ENGINE";
+      if (confirmationMode !== "ENGINE" && confirmationMode !== "MANUAL_ADJUSTED") {
+        throw badRequest("MATCH_CONFIRMATION_INVALID", "confirmation.mode must be ENGINE or MANUAL_ADJUSTED");
       }
 
-      const settlement = await txRepositories.settlements.createSettlement({
-        matchId: match.id,
-        module: input.module,
-        totalTransferVnd: evaluated.summary.totalTransferVnd,
-        totalFundInVnd: evaluated.summary.totalFundInVnd,
-        totalFundOutVnd: evaluated.summary.totalFundOutVnd,
-        engineVersion: "v1",
-        ruleSnapshot: {
-          ruleSet,
-          ruleVersion
+      const finalEvaluated =
+        confirmationMode === "MANUAL_ADJUSTED"
+          ? await calculation.buildManualAdjustedSettlementFromParticipantNets({
+              module: input.module,
+              context,
+              participantNets: input.confirmation?.participantNets ?? [],
+              overrideReason: input.confirmation?.overrideReason ?? null
+            })
+          : engineEvaluated;
+
+      const originalEngineParticipantNets = this.buildParticipantNets(
+        context.participants,
+        engineEvaluated.summary.netByPlayer,
+        playersById
+      );
+      const confirmedParticipantNets = this.buildParticipantNets(
+        context.participants,
+        finalEvaluated.summary.netByPlayer,
+        playersById
+      );
+
+      const persisted = await this.persistCreatedMatch({
+        txRepositories,
+        input,
+        playedAt,
+        ruleSet: {
+          id: ruleSet.id,
+          name: ruleSet.name,
+          module: ruleSet.module
         },
-        resultSnapshot: {
-          lines: evaluated.lines,
-          summary: evaluated.summary
-        }
+        ruleVersion: {
+          id: ruleVersion.id,
+          versionNo: ruleVersion.versionNo,
+          participantCountMin: ruleVersion.participantCountMin,
+          participantCountMax: ruleVersion.participantCountMax,
+          effectiveFrom: ruleVersion.effectiveFrom,
+          effectiveTo: ruleVersion.effectiveTo
+        },
+        contextParticipants: context.participants,
+        playersById,
+        confirmationMode,
+        overrideReason: input.confirmation?.overrideReason ?? null,
+        engineEvaluated,
+        finalEvaluated,
+        originalEngineParticipantNets,
+        confirmedParticipantNets
       });
 
-      await txRepositories.settlements.insertSettlementLines(match.id, settlement.id, evaluated.lines);
-
-      const batch = await txRepositories.ledgers.createBatch({
-        groupId: this.groupId,
+      await this.postLedgerEntries({
+        txRepositories,
+        matchId: persisted.matchId,
+        settlementId: persisted.settlementId,
         module: input.module,
-        sourceType: "MATCH_SETTLEMENT",
-        matchId: match.id,
-        description: `Match settlement for ${match.id}`,
-        referenceCode: match.id
+        lines: finalEvaluated.lines
       });
-
-      const settlementLineIds = await txRepositories.ledgers.getInsertedSettlementLineIds(settlement.id);
-      await txRepositories.ledgers.insertEntries(batch.id, settlementLineIds, postingPlan);
 
       await txRepositories.presets.upsert({
         groupId: this.groupId,
@@ -156,18 +208,28 @@ export class MatchService {
       await txRepositories.audits.insert({
         groupId: this.groupId,
         entityType: "MATCH",
-        entityId: match.id,
+        entityId: persisted.matchId,
         actionType: "CREATE",
         after: {
-          input,
+          input: {
+            ...input,
+            playedAt
+          },
           ruleSetId: input.ruleSetId,
           ruleSetVersionId: ruleVersion.id,
-          settlementSummary: evaluated.summary
+          confirmationMode,
+          overrideReason: input.confirmation?.overrideReason ?? null,
+          originalEngineSummary: engineEvaluated.summary,
+          finalSummary: finalEvaluated.summary,
+          originalEngineParticipantNets,
+          confirmedParticipantNets
         }
       });
 
-      return this.getMatchDetail(match.id);
+      return persisted.matchId;
     });
+
+    return this.getMatchDetail(matchId);
   }
 
   public async listMatches(input: {
@@ -201,6 +263,8 @@ export class MatchService {
           this.repositories.matches.getNote(match.id)
         ]);
 
+        const confirmation = this.resolveConfirmationMeta(settlement?.resultSnapshot);
+
         return {
           id: match.id,
           module: match.module,
@@ -212,6 +276,9 @@ export class MatchService {
           ruleSetVersionNo: match.rule_set_version_no ?? 1,
           notePreview: note ? note.slice(0, 120) : null,
           status: match.status,
+          confirmationMode: confirmation.confirmationMode,
+          overrideReason: confirmation.overrideReason,
+          manualAdjusted: confirmation.manualAdjusted,
           participants,
           totalTransferVnd: settlement?.totalTransferVnd ?? 0,
           totalFundInVnd: settlement?.totalFundInVnd ?? 0,
@@ -241,6 +308,8 @@ export class MatchService {
       this.repositories.rules.getRuleSetVersionDetail(match.rule_set_id, match.rule_set_version_id)
     ]);
 
+    const confirmation = this.resolveConfirmationMeta(settlement?.resultSnapshot);
+
     return {
       id: match.id,
       module: match.module,
@@ -248,6 +317,9 @@ export class MatchService {
       participantCount: match.participant_count,
       status: match.status,
       note,
+      confirmationMode: confirmation.confirmationMode,
+      overrideReason: confirmation.overrideReason,
+      manualAdjusted: confirmation.manualAdjusted,
       ruleSet: {
         id: ruleSet?.id ?? match.rule_set_id,
         name: ruleSet?.name ?? "Unknown",
@@ -264,6 +336,7 @@ export class MatchService {
           }
         : null,
       participants,
+      engineCalculationSnapshot: match.calculation_snapshot_json ?? null,
       settlement,
       voidReason: match.void_reason,
       voidedAt: match.voided_at,
@@ -328,25 +401,233 @@ export class MatchService {
     });
   }
 
-  private validateParticipants(participants: Array<{ playerId: string; tftPlacement: number }>): void {
-    if (participants.length !== 3 && participants.length !== 4) {
-      throw badRequest("MATCH_PARTICIPANT_COUNT_INVALID", "Participants must contain 3 or 4 players");
-    }
-
-    const playerIds = participants.map((item) => item.playerId);
-    if (new Set(playerIds).size !== playerIds.length) {
-      throw badRequest("MATCH_DUPLICATE_PLAYER", "Player IDs must be unique");
-    }
-
-    const placements = participants.map((item) => item.tftPlacement);
-    if (new Set(placements).size !== placements.length) {
-      throw badRequest("MATCH_DUPLICATE_PLACEMENT", "TFT placements must be unique");
-    }
-
-    for (const placement of placements) {
-      if (!Number.isInteger(placement) || placement < 1 || placement > 8) {
-        throw badRequest("MATCH_PLACEMENT_INVALID", "Each tftPlacement must be an integer in range 1..8");
+  private async persistCreatedMatch(input: {
+    txRepositories: RepositoryBundle;
+    input: CreateMatchInput;
+    playedAt: string;
+    ruleSet: {
+      id: string;
+      name: string;
+      module: ModuleType;
+    };
+    ruleVersion: {
+      id: string;
+      versionNo: number;
+      participantCountMin: number;
+      participantCountMax: number;
+      effectiveFrom: string;
+      effectiveTo: string | null;
+    };
+    contextParticipants: Array<{
+      playerId: string;
+      tftPlacement: number;
+      relativeRank: number;
+    }>;
+    playersById: Map<string, { id: string; displayName: string }>;
+    confirmationMode: MatchConfirmationMode;
+    overrideReason: string | null;
+    engineEvaluated: EvaluatedSettlement;
+    finalEvaluated: EvaluatedSettlement;
+    originalEngineParticipantNets: Array<{
+      playerId: string;
+      playerName: string;
+      netVnd: number;
+    }>;
+    confirmedParticipantNets: Array<{
+      playerId: string;
+      playerName: string;
+      netVnd: number;
+    }>;
+  }): Promise<{ matchId: string; settlementId: string }> {
+    const match = await input.txRepositories.matches.createMatch({
+      groupId: this.groupId,
+      module: input.input.module,
+      ruleSetId: input.input.ruleSetId,
+      ruleSetVersionId: input.ruleVersion.id,
+      playedAt: input.playedAt,
+      participantCount: input.input.participants.length,
+      status: "POSTED",
+      inputSnapshot: {
+        ...input.input,
+        playedAt: input.playedAt,
+        note: input.input.note ?? null,
+        confirmation: {
+          mode: input.confirmationMode,
+          participantNets: input.input.confirmation?.participantNets ?? null,
+          overrideReason: input.overrideReason
+        }
+      },
+      calculationSnapshot: {
+        engineVersion: MATCH_ENGINE_VERSION,
+        ruleSetId: input.input.ruleSetId,
+        ruleSetVersionId: input.ruleVersion.id,
+        originalEngineResult: {
+          lines: input.engineEvaluated.lines,
+          summary: input.engineEvaluated.summary
+        },
+        originalEngineParticipantNets: input.originalEngineParticipantNets
       }
+    });
+
+    const finalNetByPlayer = input.finalEvaluated.summary.netByPlayer;
+    const participantRows = input.contextParticipants.map((participant) => ({
+      playerId: participant.playerId,
+      tftPlacement: participant.tftPlacement,
+      relativeRank: participant.relativeRank,
+      isWinnerAmongParticipants: participant.relativeRank === 1,
+      settlementNetVnd: finalNetByPlayer[participant.playerId] ?? 0
+    }));
+
+    await input.txRepositories.matches.insertParticipants(match.id, participantRows);
+
+    if (input.input.note && input.input.note.trim().length > 0) {
+      await input.txRepositories.matches.upsertNote(match.id, input.input.note.trim());
     }
+
+    const settlement = await input.txRepositories.settlements.createSettlement({
+      matchId: match.id,
+      module: input.input.module,
+      totalTransferVnd: input.finalEvaluated.summary.totalTransferVnd,
+      totalFundInVnd: input.finalEvaluated.summary.totalFundInVnd,
+      totalFundOutVnd: input.finalEvaluated.summary.totalFundOutVnd,
+      engineVersion: MATCH_ENGINE_VERSION,
+      ruleSnapshot: {
+        ruleSet: input.ruleSet,
+        ruleVersion: input.ruleVersion
+      },
+      resultSnapshot: {
+        confirmationMode: input.confirmationMode,
+        manualOverride: input.confirmationMode === "MANUAL_ADJUSTED",
+        overrideReason: input.overrideReason,
+        originalEngineParticipantNets: input.originalEngineParticipantNets,
+        confirmedParticipantNets: input.confirmedParticipantNets,
+        originalEngineSummary: input.engineEvaluated.summary,
+        finalSummary: input.finalEvaluated.summary,
+        lines: input.finalEvaluated.lines
+      }
+    });
+
+    await input.txRepositories.settlements.insertSettlementLines(match.id, settlement.id, input.finalEvaluated.lines);
+
+    return { matchId: match.id, settlementId: settlement.id };
+  }
+
+  private async postLedgerEntries(input: {
+    txRepositories: RepositoryBundle;
+    matchId: string;
+    settlementId: string;
+    module: ModuleType;
+    lines: SettlementLineDraft[];
+  }): Promise<void> {
+    const ledgerPosting = new LedgerPostingService();
+    const postingPlan = ledgerPosting.buildPostingPlan(input.lines);
+
+    const batch = await input.txRepositories.ledgers.createBatch({
+      groupId: this.groupId,
+      module: input.module,
+      sourceType: "MATCH_SETTLEMENT",
+      matchId: input.matchId,
+      description: `Match settlement for ${input.matchId}`,
+      referenceCode: input.matchId
+    });
+
+    const settlementLineIds = await input.txRepositories.ledgers.getInsertedSettlementLineIds(input.settlementId);
+    await input.txRepositories.ledgers.insertEntries(batch.id, settlementLineIds, postingPlan);
+  }
+
+  private buildParticipantNets(
+    contextParticipants: Array<{ playerId: string }>,
+    netByPlayer: Record<string, number>,
+    playersById: Map<string, { id: string; displayName: string }>
+  ): Array<{ playerId: string; playerName: string; netVnd: number }> {
+    const byId = new Map(contextParticipants.map((item) => [item.playerId, item]));
+    return [...byId.values()].map((participant) => ({
+      playerId: participant.playerId,
+      playerName: playersById.get(participant.playerId)?.displayName ?? participant.playerId,
+      netVnd: netByPlayer[participant.playerId] ?? 0
+    }));
+  }
+
+  private resolveConfirmationMeta(resultSnapshot: unknown): {
+    confirmationMode: MatchConfirmationMode;
+    overrideReason: string | null;
+    manualAdjusted: boolean;
+  } {
+    if (!resultSnapshot || typeof resultSnapshot !== "object") {
+      return {
+        confirmationMode: "ENGINE",
+        overrideReason: null,
+        manualAdjusted: false
+      };
+    }
+
+    const snapshot = resultSnapshot as {
+      confirmationMode?: unknown;
+      overrideReason?: unknown;
+      manualOverride?: unknown;
+    };
+
+    const confirmationMode: MatchConfirmationMode =
+      snapshot.confirmationMode === "MANUAL_ADJUSTED" ? "MANUAL_ADJUSTED" : "ENGINE";
+    const overrideReason = typeof snapshot.overrideReason === "string" ? snapshot.overrideReason : null;
+    const manualAdjusted = confirmationMode === "MANUAL_ADJUSTED" || snapshot.manualOverride === true;
+
+    return {
+      confirmationMode,
+      overrideReason,
+      manualAdjusted
+    };
+  }
+
+  private toPreviewSettlement(
+    evaluated: EvaluatedSettlement,
+    input: {
+      ruleSet: {
+        id: string;
+        name: string;
+        module: ModuleType;
+      };
+      ruleVersion: {
+        id: string;
+        versionNo: number;
+        participantCountMin: number;
+        participantCountMax: number;
+        effectiveFrom: string;
+        effectiveTo: string | null;
+      };
+      playersById: Map<string, { id: string; displayName: string }>;
+    }
+  ) {
+    return {
+      totalTransferVnd: evaluated.summary.totalTransferVnd,
+      totalFundInVnd: evaluated.summary.totalFundInVnd,
+      totalFundOutVnd: evaluated.summary.totalFundOutVnd,
+      engineVersion: MATCH_ENGINE_VERSION,
+      ruleSnapshot: {
+        ruleSet: input.ruleSet,
+        ruleVersion: input.ruleVersion
+      },
+      resultSnapshot: {
+        lines: evaluated.lines,
+        summary: evaluated.summary
+      },
+      lines: evaluated.lines.map((line, index) => ({
+        lineNo: index + 1,
+        ruleId: line.ruleId,
+        ruleCode: line.ruleCode,
+        ruleName: line.ruleName,
+        sourceAccountId: line.sourceAccountId,
+        destinationAccountId: line.destinationAccountId,
+        sourcePlayerId: line.sourcePlayerId,
+        sourcePlayerName: line.sourcePlayerId ? (input.playersById.get(line.sourcePlayerId)?.displayName ?? null) : null,
+        destinationPlayerId: line.destinationPlayerId,
+        destinationPlayerName: line.destinationPlayerId
+          ? (input.playersById.get(line.destinationPlayerId)?.displayName ?? null)
+          : null,
+        amountVnd: line.amountVnd,
+        reasonText: line.reasonText,
+        metadata: line.metadataJson
+      }))
+    };
   }
 }

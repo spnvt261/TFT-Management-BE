@@ -37,6 +37,9 @@ interface MatchRecord {
   ruleSetId: string;
   ruleSetVersionId: string;
   participants: Array<{ playerId: string; tftPlacement: number }>;
+  confirmationMode: "ENGINE" | "MANUAL_ADJUSTED";
+  overrideReason: string | null;
+  manualAdjusted: boolean;
   status: "POSTED" | "VOIDED";
 }
 
@@ -551,6 +554,70 @@ export function createMockServices(): AppServices {
       }
     } as any,
     matches: {
+      previewMatch: async (input) => {
+        if (input.participants.length !== 3 && input.participants.length !== 4) {
+          throw new AppError(400, "MATCH_PREVIEW_INVALID", "Participants must contain 3 or 4 players");
+        }
+
+        const playerIds = input.participants.map((item) => item.playerId);
+        if (new Set(playerIds).size !== playerIds.length) {
+          throw new AppError(400, "MATCH_DUPLICATE_PLAYER", "Player IDs must be unique");
+        }
+
+        const placements = input.participants.map((item) => item.tftPlacement);
+        if (new Set(placements).size !== placements.length) {
+          throw new AppError(400, "MATCH_DUPLICATE_PLACEMENT", "TFT placements must be unique");
+        }
+
+        const ruleSet = rules.get(input.ruleSetId);
+        if (!ruleSet) {
+          throw new AppError(404, "RULE_SET_NOT_FOUND", "Rule set not found");
+        }
+        if (ruleSet.module !== input.module) {
+          throw new AppError(422, "MATCH_RULE_SET_MODULE_MISMATCH", "Rule set module does not match request module");
+        }
+
+        const version = ruleSet.versions[0];
+        if (!version) {
+          throw new AppError(422, "RULE_SET_VERSION_NOT_APPLICABLE", "No applicable rule set version");
+        }
+
+        const sorted = [...input.participants].sort((left, right) => left.tftPlacement - right.tftPlacement);
+
+        return {
+          module: input.module,
+          note: input.note ?? null,
+          ruleSet: {
+            id: ruleSet.id,
+            name: ruleSet.name,
+            module: ruleSet.module
+          },
+          ruleSetVersion: {
+            id: version.id,
+            versionNo: version.versionNo,
+            participantCountMin: version.participantCountMin,
+            participantCountMax: version.participantCountMax,
+            effectiveFrom: version.effectiveFrom,
+            effectiveTo: version.effectiveTo
+          },
+          participants: sorted.map((participant, index) => ({
+            playerId: participant.playerId,
+            playerName: players.get(participant.playerId)?.displayName ?? participant.playerId,
+            tftPlacement: participant.tftPlacement,
+            relativeRank: index + 1,
+            suggestedNetVnd: 0
+          })),
+          settlementPreview: {
+            totalTransferVnd: 0,
+            totalFundInVnd: 0,
+            totalFundOutVnd: 0,
+            engineVersion: "v-test",
+            ruleSnapshot: {},
+            resultSnapshot: {},
+            lines: []
+          }
+        };
+      },
       createMatch: async (input) => {
         if (input.participants.length !== 3 && input.participants.length !== 4) {
           throw new AppError(400, "MATCH_PARTICIPANT_COUNT_INVALID", "Participants must contain 3 or 4 players");
@@ -573,7 +640,14 @@ export function createMockServices(): AppServices {
 
         const playedAt = input.playedAt ?? new Date().toISOString();
         const id = uid("match");
-        const version = ruleSet.versions[0];
+        const version = ruleSet.versions.find((item) => item.id === input.ruleSetVersionId) ?? ruleSet.versions[0];
+        if (!version) {
+          throw new AppError(422, "RULE_SET_VERSION_NOT_APPLICABLE", "No applicable rule set version");
+        }
+
+        const confirmationMode = input.confirmation?.mode ?? "ENGINE";
+        const overrideReason = input.confirmation?.overrideReason ?? null;
+        const manualAdjusted = confirmationMode === "MANUAL_ADJUSTED";
 
         const record: MatchRecord = {
           id,
@@ -581,8 +655,11 @@ export function createMockServices(): AppServices {
           playedAt,
           participantCount: input.participants.length,
           ruleSetId: input.ruleSetId,
-          ruleSetVersionId: version?.id ?? "",
+          ruleSetVersionId: version.id,
           participants: input.participants,
+          confirmationMode,
+          overrideReason,
+          manualAdjusted,
           status: "POSTED"
         };
 
@@ -590,7 +667,7 @@ export function createMockServices(): AppServices {
         presets.set(input.module, {
           module: input.module,
           lastRuleSetId: input.ruleSetId,
-          lastRuleSetVersionId: version?.id ?? null,
+          lastRuleSetVersionId: version.id,
           lastSelectedPlayerIds: input.participants.map((participant) => participant.playerId),
           lastParticipantCount: input.participants.length,
           lastUsedAt: playedAt
@@ -602,6 +679,9 @@ export function createMockServices(): AppServices {
           playedAt,
           participantCount: input.participants.length,
           status: "POSTED",
+          confirmationMode,
+          overrideReason,
+          manualAdjusted,
           participants: input.participants.map((participant, index) => ({
             playerId: participant.playerId,
             playerName: players.get(participant.playerId)?.displayName ?? participant.playerId,
@@ -645,6 +725,9 @@ export function createMockServices(): AppServices {
             ruleSetName: rules.get(item.ruleSetId)?.name ?? "unknown",
             notePreview: null,
             ruleSetVersionNo: 1,
+            confirmationMode: item.confirmationMode,
+            overrideReason: item.overrideReason,
+            manualAdjusted: item.manualAdjusted,
             totalTransferVnd: 0,
             totalFundInVnd: 0,
             totalFundOutVnd: 0,
@@ -666,6 +749,9 @@ export function createMockServices(): AppServices {
           participantCount: item.participantCount,
           status: item.status,
           note: null,
+          confirmationMode: item.confirmationMode,
+          overrideReason: item.overrideReason,
+          manualAdjusted: item.manualAdjusted,
           ruleSet: {
             id: item.ruleSetId,
             name: rules.get(item.ruleSetId)?.name ?? "unknown",
@@ -698,6 +784,7 @@ export function createMockServices(): AppServices {
             postedToLedgerAt: now,
             lines: []
           },
+          engineCalculationSnapshot: {},
           createdAt: now,
           updatedAt: now
         };
