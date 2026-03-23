@@ -42,7 +42,7 @@ export const errorResponseSchemas: Record<number, Record<string, unknown>> = {
 export const openApiTags = [
   { name: "System", description: "System endpoints" },
   { name: "Players", description: "Player management" },
-  { name: "Rules", description: "Rule set and version management" },
+  { name: "Rules", description: "Rule management with internal immutable versioning" },
   { name: "Matches", description: "Match creation, listing, detail and void" },
   { name: "Presets", description: "Recent match presets by module" },
   { name: "Match Stakes", description: "Match stakes summary, ledger and match history" },

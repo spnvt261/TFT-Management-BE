@@ -67,7 +67,30 @@ export interface MatchStakesBuilderConfig {
   penalties: MatchStakesPenaltyConfig[];
 }
 
+export interface RuleVersionRuleInput {
+  code: string;
+  name: string;
+  description: string | null;
+  ruleKind: string;
+  priority: number;
+  status: string;
+  stopProcessingOnMatch: boolean;
+  metadata: unknown;
+  conditions: Array<{ conditionKey: string; operator: string; valueJson: unknown; sortOrder: number }>;
+  actions: Array<{
+    actionType: string;
+    amountVnd: number;
+    sourceSelectorType: string;
+    sourceSelectorJson: unknown;
+    destinationSelectorType: string;
+    destinationSelectorJson: unknown;
+    descriptionTemplate: string | null;
+    sortOrder: number;
+  }>;
+}
+
 export interface CreateRuleSetVersionRequest {
+  description: string | null;
   participantCountMin: number;
   participantCountMax: number;
   effectiveFrom: string;
@@ -76,25 +99,5 @@ export interface CreateRuleSetVersionRequest {
   summaryJson: unknown;
   builderType?: RuleBuilderType | null;
   builderConfig?: unknown | null;
-  rules?: Array<{
-    code: string;
-    name: string;
-    description: string | null;
-    ruleKind: string;
-    priority: number;
-    status: string;
-    stopProcessingOnMatch: boolean;
-    metadata: unknown;
-    conditions: Array<{ conditionKey: string; operator: string; valueJson: unknown; sortOrder: number }>;
-    actions: Array<{
-      actionType: string;
-      amountVnd: number;
-      sourceSelectorType: string;
-      sourceSelectorJson: unknown;
-      destinationSelectorType: string;
-      destinationSelectorJson: unknown;
-      descriptionTemplate: string | null;
-      sortOrder: number;
-    }>;
-  }>;
+  rules?: RuleVersionRuleInput[];
 }

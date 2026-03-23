@@ -55,6 +55,7 @@ export class RuleVersionCreationService {
 
       return this.repositories.rules.createRuleSetVersion({
         ruleSetId,
+        description: input.description,
         participantCountMin: input.participantCountMin,
         participantCountMax: input.participantCountMax,
         effectiveFrom: input.effectiveFrom,
@@ -84,6 +85,7 @@ export class RuleVersionCreationService {
 
     return this.repositories.rules.createRuleSetVersion({
       ruleSetId,
+      description: input.description,
       participantCountMin: input.participantCountMin,
       participantCountMax: input.participantCountMax,
       effectiveFrom: input.effectiveFrom,

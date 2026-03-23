@@ -68,6 +68,7 @@ export interface RuleSetVersionRecord {
   id: string;
   ruleSetId: string;
   versionNo: number;
+  description: string | null;
   participantCountMin: number;
   participantCountMax: number;
   effectiveFrom: string;

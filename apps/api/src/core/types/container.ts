@@ -28,7 +28,7 @@ export async function buildServices(pool: Pool): Promise<AppServices> {
     repositories,
     groupId,
     players: new PlayerService(repositories, groupId),
-    rules: new RuleService(repositories, groupId),
+    rules: new RuleService(pool, repositories, groupId),
     presets: new PresetService(repositories, groupId),
     matches: new MatchService(pool, repositories, groupId),
     matchStakes: new MatchStakesService(repositories, groupId),

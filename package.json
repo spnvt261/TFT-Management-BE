@@ -9,6 +9,7 @@
     "test": "npm --prefix apps/api run test",
     "lint": "npm --prefix apps/api run lint",
     "db:up": "docker compose up -d db flyway",
+    "flyway": "docker compose up -d flyway",
     "db:down": "docker compose down"
   }
 }

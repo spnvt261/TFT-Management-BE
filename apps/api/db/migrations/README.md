@@ -16,6 +16,8 @@ This project uses Flyway as the only schema source of truth.
 - `V2__seed_default_rule_sets.sql`
 - `V3__add_indexes.sql`
 - `V4__add_group_fund_transaction_indexes.sql`
+- `V5__add_rule_set_version_builder_columns.sql`
+- `V6__add_rule_set_version_description.sql`
 
 ## Operational Notes
 

@@ -63,6 +63,7 @@ function evaluate(config: unknown, participants: Array<{ playerId: string; tftPl
       id: "v-builder",
       ruleSetId: "rs-builder",
       versionNo: 1,
+      description: null,
       participantCountMin: normalized.participantCount,
       participantCountMax: normalized.participantCount,
       effectiveFrom: new Date().toISOString(),

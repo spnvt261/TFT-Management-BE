@@ -121,12 +121,9 @@ type MatchStakesPenaltyDestinationSelectorType =
 | PATCH | `/api/v1/players/:playerId` | Update player |
 | DELETE | `/api/v1/players/:playerId` | Soft delete player |
 | GET | `/api/v1/rule-sets` | List rule sets |
-| POST | `/api/v1/rule-sets` | Create rule set |
+| POST | `/api/v1/rule-sets` | Create rule (creates rule set + first version) |
 | GET | `/api/v1/rule-sets/:ruleSetId` | Rule set detail |
-| PATCH | `/api/v1/rule-sets/:ruleSetId` | Update rule set metadata |
-| POST | `/api/v1/rule-sets/:ruleSetId/versions` | Create rule set version |
-| GET | `/api/v1/rule-sets/:ruleSetId/versions/:versionId` | Rule set version detail |
-| PATCH | `/api/v1/rule-sets/:ruleSetId/versions/:versionId` | Update rule set version metadata |
+| PATCH | `/api/v1/rule-sets/:ruleSetId` | Edit rule (creates new immutable version) |
 | GET | `/api/v1/rule-sets/default/by-module/:module` | Default rule set by module |
 | POST | `/api/v1/matches` | Create match, calculate settlement, post ledger |
 | GET | `/api/v1/matches` | List matches |
@@ -398,15 +395,20 @@ Main errors:
 
 ### GET `/api/v1/rule-sets`
 
-Business purpose: list rule sets with filtering.
+Business purpose: list rules with filtering. A rule set remains the stable identity, while business-facing config fields are taken from the latest version.
 
 Request DTO:
 
 ```ts
 interface ListRuleSetsQuery {
   module?: ModuleType;
+  modules?: ModuleType[]; // supports csv or repeated query params
   status?: "ACTIVE" | "INACTIVE";
   isDefault?: boolean;
+  default?: boolean; // alias of isDefault
+  search?: string; // 1..150
+  from?: string; // datetime
+  to?: string; // datetime
   page?: number; // default 1
   pageSize?: number; // default 20, max 100
 }
@@ -433,120 +435,55 @@ ApiSuccessResponse<RuleSetDto[]>;
 Processing flow:
 
 1. Parse query + paging.
-2. Filter by group and optional module/status/default.
+2. Filter by group and optional module/modules/status/default/search/date range.
 3. Return sorted by `createdAt DESC`.
 
 ### POST `/api/v1/rule-sets`
 
-Business purpose: create new rule set metadata.
+Business purpose: create one business "Rule" in a single request:
+
+1. create rule set identity row,
+2. automatically create first immutable version (`versionNo = 1`),
+3. persist compiled/raw rules into that version.
 
 Request DTO:
 
 ```ts
-interface CreateRuleSetRequest {
-  module: ModuleType;
-  code: string; // 1..80
-  name: string; // 1..150
+interface RuleInput {
+  code: string;
+  name: string;
   description?: string | null;
+  ruleKind: RuleKind;
+  priority?: number; // default 100
   status?: "ACTIVE" | "INACTIVE"; // default ACTIVE
-  isDefault?: boolean; // default false
-}
-```
-
-Response DTO: `ApiSuccessResponse<RuleSetDto>`.
-
-Processing flow:
-
-1. Validate body.
-2. If `isDefault=true`, clear existing default in same module/group.
-3. Insert rule set.
-4. Return created row.
-
-Main errors:
-
-- `409 RULE_SET_DUPLICATE` when code duplicates in group.
-
-### GET `/api/v1/rule-sets/:ruleSetId`
-
-Business purpose: rule set detail + all versions (metadata level).
-
-Request DTO:
-
-```ts
-interface RuleSetIdParam {
-  ruleSetId: string; // uuid
-}
-```
-
-Response DTO:
-
-```ts
-interface RuleSetVersionListItemDto {
-  id: string;
-  ruleSetId: string;
-  versionNo: number;
-  participantCountMin: number;
-  participantCountMax: number;
-  effectiveFrom: string;
-  effectiveTo: string | null;
-  isActive: boolean;
-  summaryJson: unknown;
-  builderType: string | null;
-  builderConfig: unknown | null;
-  createdAt: string;
-  rules: []; // list endpoint returns empty rules here
+  stopProcessingOnMatch?: boolean; // default false
+  metadata?: Record<string, unknown> | null;
+  conditions: Array<{
+    conditionKey:
+      | "participantCount"
+      | "module"
+      | "subjectRelativeRank"
+      | "subjectAbsolutePlacement"
+      | "matchContainsAbsolutePlacements";
+    operator: ConditionOperator;
+    valueJson: unknown;
+    sortOrder?: number; // default 1
+  }>;
+  actions: Array<{
+    actionType: "TRANSFER" | "POST_TO_FUND" | "CREATE_OBLIGATION" | "REDUCE_OBLIGATION";
+    amountVnd: number;
+    sourceSelectorType: SelectorType;
+    sourceSelectorJson?: unknown; // default {}
+    destinationSelectorType: SelectorType;
+    destinationSelectorJson?: unknown; // default {}
+    descriptionTemplate?: string | null;
+    sortOrder?: number; // default 1
+  }>;
 }
 
-ApiSuccessResponse<RuleSetDto & { versions: RuleSetVersionListItemDto[] }>;
-```
-
-Processing flow:
-
-1. Load rule set by id + group.
-2. Load versions sorted by `versionNo DESC`.
-3. Return merged object.
-
-Main errors:
-
-- `404 RULE_SET_NOT_FOUND`.
-
-### PATCH `/api/v1/rule-sets/:ruleSetId`
-
-Business purpose: update rule set metadata.
-
-Request DTO:
-
-```ts
-interface UpdateRuleSetRequest {
-  name?: string;
-  description?: string | null;
-  status?: "ACTIVE" | "INACTIVE";
-  isDefault?: boolean;
-}
-```
-
-Response DTO: `ApiSuccessResponse<RuleSetDto>`.
-
-Processing flow:
-
-1. Require at least one field.
-2. If setting default true, clear previous default of same module.
-3. Update record and return.
-
-Main errors:
-
-- `404 RULE_SET_NOT_FOUND`.
-
-### POST `/api/v1/rule-sets/:ruleSetId/versions`
-
-Business purpose: create immutable rule-set version in either raw mode (generic rules) or builder mode (business-friendly Match Stakes config compiled to generic rules).
-
-Request DTO:
-
-```ts
 interface MatchStakesPenaltyConfig {
   absolutePlacement: number; // 1..8
-  amountVnd: number; // positive integer
+  amountVnd: number;
   destinationSelectorType?: MatchStakesPenaltyDestinationSelectorType; // default BEST_PARTICIPANT
   destinationSelectorJson?: Record<string, unknown> | null;
   code?: string;
@@ -562,51 +499,34 @@ interface MatchStakesBuilderConfig {
   penalties?: MatchStakesPenaltyConfig[];
 }
 
-interface CreateRuleSetVersionRequest {
+interface CreateRuleRequest {
+  // root-level fields
+  module: ModuleType;
+  name: string; // 1..150
+  status?: "ACTIVE" | "INACTIVE"; // default ACTIVE
+  isDefault?: boolean; // default false
+
+  // version-level fields
+  description: string | null; // required, belongs to version
   participantCountMin: number; // 2..8
   participantCountMax: number; // 2..8
   effectiveTo?: string | null; // datetime
   isActive?: boolean; // default true
   summaryJson?: Record<string, unknown> | null;
 
-  // Builder mode (MATCH_STAKES only)
-  builderType?: RuleBuilderType | null; // currently supports MATCH_STAKES_PAYOUT
-  builderConfig?: MatchStakesBuilderConfig | null;
+  // Builder mode
+  builderType?: RuleBuilderType | null; // currently MATCH_STAKES_PAYOUT
+  builderConfig?: MatchStakesBuilderConfig | Record<string, unknown> | null;
 
-  // Raw mode (backward compatible)
-  rules?: Array<{
-    code: string;
-    name: string;
-    description?: string | null;
-    ruleKind: RuleKind;
-    priority?: number; // default 100
-    status?: "ACTIVE" | "INACTIVE"; // default ACTIVE
-    stopProcessingOnMatch?: boolean; // default false
-    metadata?: Record<string, unknown> | null;
-    conditions: Array<{
-      conditionKey:
-        | "participantCount"
-        | "module"
-        | "subjectRelativeRank"
-        | "subjectAbsolutePlacement"
-        | "matchContainsAbsolutePlacements";
-      operator: ConditionOperator;
-      valueJson: unknown;
-      sortOrder?: number; // default 1
-    }>;
-    actions: Array<{
-      actionType: "TRANSFER" | "POST_TO_FUND" | "CREATE_OBLIGATION" | "REDUCE_OBLIGATION";
-      amountVnd: number;
-      sourceSelectorType: SelectorType;
-      sourceSelectorJson?: unknown; // default {}
-      destinationSelectorType: SelectorType;
-      destinationSelectorJson?: unknown; // default {}
-      descriptionTemplate?: string | null;
-      sortOrder?: number; // default 1
-    }>;
-  }>;
+  // Raw mode
+  rules?: RuleInput[];
 }
 ```
+
+Important notes:
+
+- `code` is not accepted from FE. Backend auto-generates a 6-letter uppercase code.
+- Builder mode and raw mode are mutually exclusive in one request.
 
 Response DTO:
 
@@ -649,6 +569,7 @@ interface RuleSetVersionDetailDto {
   id: string;
   ruleSetId: string;
   versionNo: number;
+  description: string | null; // version-owned description
   participantCountMin: number;
   participantCountMax: number;
   effectiveFrom: string;
@@ -661,93 +582,133 @@ interface RuleSetVersionDetailDto {
   rules: RuleDto[];
 }
 
-ApiSuccessResponse<RuleSetVersionDetailDto>;
+interface RuleSetDetailDto extends RuleSetDto {
+  latestVersion: RuleSetVersionDetailDto | null;
+  versions: RuleSetVersionDetailDto[];
+}
+
+ApiSuccessResponse<RuleSetDetailDto>;
 ```
 
 Processing flow:
 
-1. Validate rule set exists.
-2. Validate `participantCountMin <= participantCountMax`.
-3. Determine mode:
-   - Raw mode: use `rules`.
-   - Builder mode: require `builderType` + `builderConfig`.
-   - Reject mixed payload (`rules` + builder fields together).
-4. Builder mode validation (MATCH_STAKES_PAYOUT):
-   - module must be `MATCH_STAKES`,
-   - `participantCount` supports `3` or `4`,
-   - `participantCountMin` and `participantCountMax` must equal builder `participantCount`,
-   - winner/payout/loss rank and amount constraints,
-   - payout/loss base totals must balance,
-   - penalty placement constraints (1..8).
-5. In builder mode, compile business config into deterministic generic rules/conditions/actions.
-6. Set `effectiveFrom = now`.
-7. Determine next `versionNo` (`max + 1`).
-8. Insert version metadata including `builderType` and normalized `builderConfig`.
-9. Insert compiled/raw rules with conditions and actions.
-10. Reload full detail and return.
+1. Validate body.
+2. Generate unique code (`[A-Z]{6}`) in backend.
+3. If `isDefault=true`, clear existing default in same module/group.
+4. Insert rule set identity row.
+5. Validate builder/raw mode and business constraints.
+6. Create first version with `effectiveFrom = now`.
+7. Compile builder config to generic rules when in builder mode, or persist raw rules directly.
+8. Return detail including `latestVersion` and full `versions`.
 
 Main errors:
 
-- `404 RULE_SET_NOT_FOUND`.
+- `409 RULE_SET_DUPLICATE` (rare generated code collision).
+- `409 RULE_SET_CODE_GENERATION_FAILED` when unique code could not be generated after retries.
 - `400 RULE_SET_VERSION_INVALID`.
-- `400 RULE_BUILDER_UNSUPPORTED_MODULE`.
 - `400 RULE_BUILDER_INVALID_CONFIG`.
+- `400 RULE_BUILDER_UNSUPPORTED_MODULE`.
 - `400 RULE_BUILDER_PAYOUT_LOSS_UNBALANCED`.
 - `400 RULE_BUILDER_PARTICIPANT_COUNT_UNSUPPORTED`.
 - `400 RULE_BUILDER_DUPLICATE_RANK`.
 - `400 RULE_BUILDER_RANK_COVERAGE_INVALID`.
 
-### GET `/api/v1/rule-sets/:ruleSetId/versions/:versionId`
+### GET `/api/v1/rule-sets/:ruleSetId`
 
-Business purpose: full version detail for rule editing/viewing.
+Business purpose: rule detail for UI screens. Returns root identity + latest version + full version history.
 
 Request DTO:
 
 ```ts
-interface RuleSetVersionParam {
-  ruleSetId: string;
-  versionId: string;
+interface RuleSetIdParam {
+  ruleSetId: string; // uuid
 }
 ```
 
-Response DTO: `ApiSuccessResponse<RuleSetVersionDetailDto>`.
+Response DTO:
+
+```ts
+ApiSuccessResponse<RuleSetDetailDto>;
+```
 
 Processing flow:
 
-1. Query version.
-2. Query all rules of that version.
-3. Query and attach conditions/actions.
-4. Return nested structure.
+1. Load rule set by id + group.
+2. Load versions sorted by `versionNo DESC`.
+3. Load full detail (including rules/conditions/actions) for each version.
+4. Return merged object.
 
 Main errors:
 
-- `404 RULE_SET_VERSION_NOT_FOUND`.
+- `404 RULE_SET_NOT_FOUND`.
 
-### PATCH `/api/v1/rule-sets/:ruleSetId/versions/:versionId`
+### PATCH `/api/v1/rule-sets/:ruleSetId`
 
-Business purpose: update version metadata (not rule logic body).
+Business purpose: edit rule by creating a new immutable version.
+
+This endpoint no longer behaves like a metadata-only patch.
 
 Request DTO:
 
 ```ts
-interface UpdateRuleSetVersionRequest {
-  isActive?: boolean;
+interface EditRuleRequest {
+  // optional root metadata updates
+  name?: string;
+  status?: "ACTIVE" | "INACTIVE";
+  isDefault?: boolean;
+
+  // required version payload (same shape as create for version part)
+  description: string | null;
+  participantCountMin: number;
+  participantCountMax: number;
   effectiveTo?: string | null;
+  isActive?: boolean;
   summaryJson?: Record<string, unknown> | null;
+  builderType?: RuleBuilderType | null;
+  builderConfig?: MatchStakesBuilderConfig | Record<string, unknown> | null;
+  rules?: RuleInput[];
 }
 ```
 
-Response DTO: `ApiSuccessResponse<RuleSetVersionDetailDto>`.
+Important notes:
+
+- `module` cannot be changed (not accepted by payload).
+- `code` cannot be changed (not accepted by payload).
+- previous versions are never overwritten.
+
+Response DTO: `ApiSuccessResponse<RuleSetDetailDto>`.
 
 Processing flow:
 
-1. Require at least one updatable field.
-2. Update metadata columns.
-3. Reload detail and return.
+1. Load rule set by id + group.
+2. Apply optional root metadata updates (`name`, `status`, `isDefault`).
+3. Create next immutable version (`versionNo = max + 1`, `effectiveFrom = now`).
+4. Validate and persist builder/raw logic as in create flow.
+5. Return detail where `latestVersion` is the newly created version.
 
 Main errors:
 
-- `404 RULE_SET_VERSION_NOT_FOUND`.
+- `404 RULE_SET_NOT_FOUND`.
+- `400 RULE_SET_VERSION_INVALID`.
+- `400 RULE_BUILDER_INVALID_CONFIG`.
+- `400 RULE_BUILDER_UNSUPPORTED_MODULE`.
+- `400 RULE_BUILDER_PAYOUT_LOSS_UNBALANCED`.
+- `400 RULE_BUILDER_PARTICIPANT_COUNT_UNSUPPORTED`.
+- `400 RULE_BUILDER_DUPLICATE_RANK`.
+- `400 RULE_BUILDER_RANK_COVERAGE_INVALID`.
+
+### Removed public version endpoints
+
+The following APIs are no longer public in the product flow:
+
+- `POST /api/v1/rule-sets/:ruleSetId/versions`
+- `GET /api/v1/rule-sets/:ruleSetId/versions/:versionId`
+- `PATCH /api/v1/rule-sets/:ruleSetId/versions/:versionId`
+
+Versioning still exists internally for persistence/auditability, but creation/editing is now driven only through:
+
+- `POST /api/v1/rule-sets` (create first version)
+- `PATCH /api/v1/rule-sets/:ruleSetId` (create next version)
 
 ### GET `/api/v1/rule-sets/default/by-module/:module`
 
@@ -1429,10 +1390,11 @@ Processing flow:
 | `GROUP_NOT_FOUND` | Default group code not found at startup |
 | `PLAYER_DUPLICATE` | Player slug conflict |
 | `PLAYER_NOT_FOUND` | Player not found in active group membership |
-| `RULE_SET_DUPLICATE` | Rule set code conflict in group |
+| `RULE_SET_DUPLICATE` | Rule set code conflict in group (rare generated code collision) |
+| `RULE_SET_CODE_GENERATION_FAILED` | Could not generate a unique rule code after retries |
 | `RULE_SET_NOT_FOUND` | Rule set id not found |
-| `RULE_SET_VERSION_INVALID` | Invalid participant min/max |
-| `RULE_SET_VERSION_NOT_FOUND` | Rule version not found |
+| `RULE_SET_VERSION_INVALID` | Invalid version payload (participant range/rules requirement) |
+| `RULE_VERSION_NOT_FOUND` | Created version could not be reloaded (unexpected consistency error) |
 | `RULE_SET_DEFAULT_NOT_FOUND` | No active default rule set for module |
 | `RULE_BUILDER_UNSUPPORTED_MODULE` | Builder used outside supported module |
 | `RULE_BUILDER_INVALID_CONFIG` | Builder config invalid or mixed mode payload |

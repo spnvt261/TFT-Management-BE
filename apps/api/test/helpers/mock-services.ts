@@ -57,6 +57,15 @@ function uid(prefix: string): string {
   return randomUUID();
 }
 
+function createRuleCode(): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  let result = "";
+  for (let index = 0; index < 6; index += 1) {
+    result += alphabet[Math.floor(Math.random() * alphabet.length)]!;
+  }
+  return result;
+}
+
 export function createMockServices(): AppServices {
   const players = new Map<string, Player>();
   const rules = new Map<string, RuleSet>();
@@ -122,6 +131,7 @@ export function createMockServices(): AppServices {
         id: "30000000-0000-4000-8000-000000000001",
         ruleSetId: "20000000-0000-4000-8000-000000000001",
         versionNo: 1,
+        description: "Default Match Stakes rule",
         participantCountMin: 3,
         participantCountMax: 4,
         effectiveFrom: now,
@@ -151,6 +161,7 @@ export function createMockServices(): AppServices {
         id: "30000000-0000-4000-8000-000000000002",
         ruleSetId: "20000000-0000-4000-8000-000000000002",
         versionNo: 1,
+        description: "Default Group Fund rule",
         participantCountMin: 3,
         participantCountMax: 3,
         effectiveFrom: now,
@@ -183,6 +194,88 @@ export function createMockServices(): AppServices {
     lastParticipantCount: null,
     lastUsedAt: null
   });
+
+  const toRuleSetResponse = (item: RuleSet) => ({
+    ...item,
+    description: item.versions[0]?.description ?? null
+  });
+
+  const toRuleSetDetailResponse = (item: RuleSet) => {
+    const normalized = toRuleSetResponse(item);
+    return {
+      ...normalized,
+      latestVersion: normalized.versions[0] ?? null,
+      versions: [...normalized.versions]
+    };
+  };
+
+  const createVersionForRuleSet = (
+    item: RuleSet,
+    input: {
+      description: string | null;
+      participantCountMin: number;
+      participantCountMax: number;
+      effectiveTo: string | null;
+      isActive: boolean;
+      summaryJson: unknown;
+      builderType?: string | null;
+      builderConfig?: unknown | null;
+      rules?: Array<any>;
+    }
+  ) => {
+    if (input.participantCountMin > input.participantCountMax) {
+      throw new AppError(400, "RULE_SET_VERSION_INVALID", "participantCountMin must be <= participantCountMax");
+    }
+
+    const requestedBuilderMode =
+      (input.builderType !== undefined && input.builderType !== null) ||
+      (input.builderConfig !== undefined && input.builderConfig !== null);
+
+    if (requestedBuilderMode && input.rules) {
+      throw new AppError(400, "RULE_BUILDER_INVALID_CONFIG", "Cannot combine builder mode with raw rules");
+    }
+
+    let persistedRules = input.rules ?? [];
+    let persistedBuilderConfig = input.builderConfig ?? null;
+    let persistedBuilderType = input.builderType ?? null;
+
+    if (requestedBuilderMode) {
+      if (!input.builderType || input.builderConfig === undefined || input.builderConfig === null) {
+        throw new AppError(400, "RULE_BUILDER_INVALID_CONFIG", "builderType and builderConfig are both required");
+      }
+
+      if (input.builderType === "MATCH_STAKES_PAYOUT") {
+        const normalized = builderValidationService.validate({
+          module: item.module,
+          participantCountMin: input.participantCountMin,
+          participantCountMax: input.participantCountMax,
+          builderConfig: input.builderConfig
+        });
+        persistedBuilderConfig = normalized;
+        persistedRules = builderCompileService.compile(normalized);
+        persistedBuilderType = input.builderType;
+      }
+    } else if (!persistedRules || persistedRules.length === 0) {
+      throw new AppError(400, "RULE_SET_VERSION_INVALID", "rules is required when builder mode is not used");
+    }
+
+    return {
+      id: uid("version"),
+      ruleSetId: item.id,
+      versionNo: item.versions.length + 1,
+      description: input.description ?? null,
+      participantCountMin: input.participantCountMin,
+      participantCountMax: input.participantCountMax,
+      effectiveFrom: new Date().toISOString(),
+      effectiveTo: input.effectiveTo,
+      isActive: input.isActive,
+      summaryJson: input.summaryJson,
+      builderType: persistedBuilderType,
+      builderConfig: persistedBuilderConfig,
+      createdAt: new Date().toISOString(),
+      rules: persistedRules
+    };
+  };
 
   const services: AppServices = {
     repositories: {} as any,
@@ -287,117 +380,90 @@ export function createMockServices(): AppServices {
 
         const start = (page - 1) * pageSize;
         return {
-          items: items.slice(start, start + pageSize),
+          items: items.slice(start, start + pageSize).map((item) => toRuleSetResponse(item)),
           total: items.length
         };
       },
-      createRuleSet: async (input) => {
+      createRule: async (input) => {
         const id = uid("ruleset");
+        if (input.isDefault) {
+          for (const existing of rules.values()) {
+            if (existing.module === input.module) {
+              existing.isDefault = false;
+            }
+          }
+        }
+
         const created: RuleSet = {
           id,
           module: input.module,
-          code: input.code,
+          code: createRuleCode(),
           name: input.name,
-          description: input.description,
+          description: null,
           status: input.status,
           isDefault: input.isDefault,
-          createdAt: now,
-          updatedAt: now,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
           versions: []
         };
+
+        const version = createVersionForRuleSet(created, {
+          description: input.version.description,
+          participantCountMin: input.version.participantCountMin,
+          participantCountMax: input.version.participantCountMax,
+          effectiveTo: input.version.effectiveTo,
+          isActive: input.version.isActive,
+          summaryJson: input.version.summaryJson,
+          builderType: input.version.builderType,
+          builderConfig: input.version.builderConfig,
+          rules: input.version.rules
+        });
+
+        created.versions.unshift(version);
         rules.set(id, created);
-        return created;
+        return toRuleSetDetailResponse(created);
       },
       getRuleSet: async (ruleSetId) => {
         const item = rules.get(ruleSetId);
         if (!item) {
           throw new AppError(404, "RULE_SET_NOT_FOUND", "Rule set not found");
         }
-        return item;
+        return toRuleSetDetailResponse(item);
       },
-      updateRuleSet: async (ruleSetId, input) => {
-        const item = rules.get(ruleSetId);
-        if (!item) {
-          throw new AppError(404, "RULE_SET_NOT_FOUND", "Rule set not found");
-        }
-        const updated = {
-          ...item,
-          name: input.name ?? item.name,
-          description: input.description === undefined ? item.description : input.description,
-          isDefault: input.isDefault ?? item.isDefault,
-          status: input.status ?? item.status
-        };
-        rules.set(ruleSetId, updated);
-        return updated;
-      },
-      createVersion: async (ruleSetId, input) => {
+      editRule: async (ruleSetId, input) => {
         const item = rules.get(ruleSetId);
         if (!item) {
           throw new AppError(404, "RULE_SET_NOT_FOUND", "Rule set not found");
         }
 
-        if (input.builderType && input.rules) {
-          throw new AppError(400, "RULE_BUILDER_INVALID_CONFIG", "Cannot combine builder mode with raw rules");
+        if (input.isDefault === true) {
+          for (const existing of rules.values()) {
+            if (existing.module === item.module) {
+              existing.isDefault = false;
+            }
+          }
         }
 
-        let persistedRules = input.rules ?? [];
-        let persistedBuilderConfig = input.builderConfig ?? null;
-        let persistedBuilderType = input.builderType ?? null;
+        item.name = input.name ?? item.name;
+        item.status = input.status ?? item.status;
+        item.isDefault = input.isDefault ?? item.isDefault;
+        item.updatedAt = new Date().toISOString();
 
-        if (input.builderType === "MATCH_STAKES_PAYOUT") {
-          const normalized = builderValidationService.validate({
-            module: item.module,
-            participantCountMin: input.participantCountMin,
-            participantCountMax: input.participantCountMax,
-            builderConfig: input.builderConfig
-          });
-          persistedBuilderConfig = normalized;
-          persistedRules = builderCompileService.compile(normalized);
-          persistedBuilderType = input.builderType;
-        }
+        const newVersion = createVersionForRuleSet(item, {
+          description: input.version.description,
+          participantCountMin: input.version.participantCountMin,
+          participantCountMax: input.version.participantCountMax,
+          effectiveTo: input.version.effectiveTo,
+          isActive: input.version.isActive,
+          summaryJson: input.version.summaryJson,
+          builderType: input.version.builderType,
+          builderConfig: input.version.builderConfig,
+          rules: input.version.rules
+        });
 
-        const version = {
-          id: uid("version"),
-          ruleSetId,
-          versionNo: item.versions.length + 1,
-          participantCountMin: input.participantCountMin,
-          participantCountMax: input.participantCountMax,
-          effectiveFrom: input.effectiveFrom,
-          effectiveTo: input.effectiveTo,
-          isActive: input.isActive,
-          summaryJson: input.summaryJson,
-          builderType: persistedBuilderType,
-          builderConfig: persistedBuilderConfig,
-          createdAt: new Date().toISOString(),
-          rules: persistedRules
-        };
-
-        item.versions.unshift(version);
+        item.versions.unshift(newVersion);
         rules.set(ruleSetId, item);
-        return version;
-      },
-      getVersion: async (ruleSetId, versionId) => {
-        const item = rules.get(ruleSetId);
-        if (!item) {
-          throw new AppError(404, "RULE_SET_NOT_FOUND", "Rule set not found");
-        }
-        const version = item.versions.find((it) => it.id === versionId);
-        if (!version) {
-          throw new AppError(404, "RULE_SET_VERSION_NOT_FOUND", "Rule set version not found");
-        }
-        return version;
-      },
-      updateVersion: async (ruleSetId, versionId, input) => {
-        const item = rules.get(ruleSetId);
-        if (!item) {
-          throw new AppError(404, "RULE_SET_NOT_FOUND", "Rule set not found");
-        }
-        const version = item.versions.find((it) => it.id === versionId);
-        if (!version) {
-          throw new AppError(404, "RULE_SET_VERSION_NOT_FOUND", "Rule set version not found");
-        }
-        Object.assign(version, input);
-        return version;
+        return toRuleSetDetailResponse(item);
       },
       getDefaultByModule: async (module, participantCount) => {
         const item = Array.from(rules.values()).find((value) => value.module === module && value.isDefault);
@@ -405,7 +471,7 @@ export function createMockServices(): AppServices {
           throw new AppError(404, "RULE_SET_DEFAULT_NOT_FOUND", "Not found");
         }
         return {
-          ruleSet: item,
+          ruleSet: toRuleSetResponse(item),
           activeVersion:
             participantCount === undefined
               ? null

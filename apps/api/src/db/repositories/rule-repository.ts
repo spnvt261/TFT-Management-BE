@@ -20,14 +20,12 @@ export interface CreateRuleSetInput {
   module: ModuleType;
   code: string;
   name: string;
-  description: string | null;
   status: "ACTIVE" | "INACTIVE";
   isDefault: boolean;
 }
 
 export interface UpdateRuleSetInput {
   name?: string;
-  description?: string | null;
   status?: "ACTIVE" | "INACTIVE";
   isDefault?: boolean;
 }
@@ -61,6 +59,7 @@ export interface CreateRuleVersionRuleInput {
 
 export interface CreateRuleSetVersionInput {
   ruleSetId: string;
+  description: string | null;
   participantCountMin: number;
   participantCountMax: number;
   effectiveFrom: string;
@@ -180,10 +179,25 @@ export class RuleRepository {
       updated_at: string;
     }>(
       `
-      SELECT id, module, code, name, description, status, is_default, created_at, updated_at
-      FROM rule_sets
+      SELECT rs.id,
+             rs.module,
+             rs.code,
+             rs.name,
+             COALESCE(latest_version.description, rs.description) AS description,
+             rs.status,
+             rs.is_default,
+             rs.created_at,
+             rs.updated_at
+      FROM rule_sets rs
+      LEFT JOIN LATERAL (
+        SELECT v.description
+        FROM rule_set_versions v
+        WHERE v.rule_set_id = rs.id
+        ORDER BY v.version_no DESC
+        LIMIT 1
+      ) AS latest_version ON TRUE
       WHERE ${whereSql}
-      ORDER BY created_at DESC
+      ORDER BY rs.created_at DESC
       LIMIT $${params.length - 1} OFFSET $${params.length}
       `,
       params
@@ -220,7 +234,7 @@ export class RuleRepository {
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING id, module, code, name, description, status, is_default, created_at, updated_at
         `,
-        [input.groupId, input.module, input.code, input.name, input.description, input.status, input.isDefault]
+        [input.groupId, input.module, input.code, input.name, null, input.status, input.isDefault]
       );
 
       return mapRuleSet(result.rows[0]!);
@@ -246,9 +260,24 @@ export class RuleRepository {
       updated_at: string;
     }>(
       `
-      SELECT id, module, code, name, description, status, is_default, created_at, updated_at
-      FROM rule_sets
-      WHERE id = $1 AND group_id = $2
+      SELECT rs.id,
+             rs.module,
+             rs.code,
+             rs.name,
+             COALESCE(latest_version.description, rs.description) AS description,
+             rs.status,
+             rs.is_default,
+             rs.created_at,
+             rs.updated_at
+      FROM rule_sets rs
+      LEFT JOIN LATERAL (
+        SELECT v.description
+        FROM rule_set_versions v
+        WHERE v.rule_set_id = rs.id
+        ORDER BY v.version_no DESC
+        LIMIT 1
+      ) AS latest_version ON TRUE
+      WHERE rs.id = $1 AND rs.group_id = $2
       LIMIT 1
       `,
       [ruleSetId, groupId]
@@ -272,39 +301,32 @@ export class RuleRepository {
 
     const result = await this.db.query<{
       id: string;
-      module: string;
-      code: string;
-      name: string;
-      description: string | null;
-      status: string;
-      is_default: boolean;
-      created_at: string;
-      updated_at: string;
     }>(
       `
       UPDATE rule_sets
       SET
         name = COALESCE($3, name),
-        description = CASE WHEN $4::boolean THEN NULL ELSE COALESCE($5, description) END,
-        status = COALESCE($6, status),
-        is_default = COALESCE($7, is_default),
+        status = COALESCE($4, status),
+        is_default = COALESCE($5, is_default),
         updated_at = now()
       WHERE id = $1 AND group_id = $2
-      RETURNING id, module, code, name, description, status, is_default, created_at, updated_at
+      RETURNING id
       `,
       [
         ruleSetId,
         groupId,
         input.name ?? null,
-        input.description === null,
-        input.description ?? null,
         input.status ?? null,
         input.isDefault ?? null
       ]
     );
 
     const row = result.rows[0];
-    return row ? mapRuleSet(row) : null;
+    if (!row) {
+      return null;
+    }
+
+    return this.getRuleSetById(groupId, row.id);
   }
 
   public async listRuleSetVersions(ruleSetId: string): Promise<RuleSetVersionRecord[]> {
@@ -312,6 +334,7 @@ export class RuleRepository {
       id: string;
       rule_set_id: string;
       version_no: number;
+      description: string | null;
       participant_count_min: number;
       participant_count_max: number;
       effective_from: string;
@@ -323,7 +346,7 @@ export class RuleRepository {
       created_at: string;
     }>(
       `
-      SELECT id, rule_set_id, version_no, participant_count_min, participant_count_max, effective_from, effective_to, is_active,
+      SELECT id, rule_set_id, version_no, description, participant_count_min, participant_count_max, effective_from, effective_to, is_active,
              summary_json, builder_type, builder_config_json, created_at
       FROM rule_set_versions
       WHERE rule_set_id = $1
@@ -336,6 +359,7 @@ export class RuleRepository {
       id: row.id,
       ruleSetId: row.rule_set_id,
       versionNo: row.version_no,
+      description: row.description,
       participantCountMin: row.participant_count_min,
       participantCountMax: row.participant_count_max,
       effectiveFrom: row.effective_from,
@@ -361,6 +385,7 @@ export class RuleRepository {
       id: string;
       rule_set_id: string;
       version_no: number;
+      description: string | null;
       participant_count_min: number;
       participant_count_max: number;
       effective_from: string;
@@ -373,16 +398,17 @@ export class RuleRepository {
     }>(
       `
       INSERT INTO rule_set_versions(
-        rule_set_id, version_no, participant_count_min, participant_count_max, effective_from, effective_to, is_active, summary_json,
-        builder_type, builder_config_json
+        rule_set_id, version_no, description, participant_count_min, participant_count_max, effective_from, effective_to, is_active,
+        summary_json, builder_type, builder_config_json
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-      RETURNING id, rule_set_id, version_no, participant_count_min, participant_count_max, effective_from, effective_to,
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      RETURNING id, rule_set_id, version_no, description, participant_count_min, participant_count_max, effective_from, effective_to,
                 is_active, summary_json, builder_type, builder_config_json, created_at
       `,
       [
         input.ruleSetId,
         versionNo,
+        input.description,
         input.participantCountMin,
         input.participantCountMax,
         input.effectiveFrom,
@@ -468,6 +494,7 @@ export class RuleRepository {
       id: string;
       rule_set_id: string;
       version_no: number;
+      description: string | null;
       participant_count_min: number;
       participant_count_max: number;
       effective_from: string;
@@ -479,7 +506,7 @@ export class RuleRepository {
       created_at: string;
     }>(
       `
-      SELECT id, rule_set_id, version_no, participant_count_min, participant_count_max, effective_from, effective_to,
+      SELECT id, rule_set_id, version_no, description, participant_count_min, participant_count_max, effective_from, effective_to,
              is_active, summary_json, builder_type, builder_config_json, created_at
       FROM rule_set_versions
       WHERE id = $1 AND rule_set_id = $2
@@ -588,6 +615,7 @@ export class RuleRepository {
       id: versionRow.id,
       ruleSetId: versionRow.rule_set_id,
       versionNo: versionRow.version_no,
+      description: versionRow.description,
       participantCountMin: versionRow.participant_count_min,
       participantCountMax: versionRow.participant_count_max,
       effectiveFrom: versionRow.effective_from,
@@ -599,40 +627,6 @@ export class RuleRepository {
       createdAt: versionRow.created_at,
       rules
     };
-  }
-
-  public async updateRuleSetVersion(
-    ruleSetId: string,
-    versionId: string,
-    input: { isActive?: boolean; effectiveFrom?: string; effectiveTo?: string | null; summaryJson?: unknown }
-  ): Promise<RuleSetVersionRecord | null> {
-    const result = await this.db.query<{ id: string }>(
-      `
-      UPDATE rule_set_versions
-      SET
-        is_active = COALESCE($3, is_active),
-        effective_from = COALESCE($4, effective_from),
-        effective_to = CASE WHEN $5::boolean THEN NULL ELSE COALESCE($6, effective_to) END,
-        summary_json = COALESCE($7, summary_json)
-      WHERE id = $1 AND rule_set_id = $2
-      RETURNING id
-      `,
-      [
-        versionId,
-        ruleSetId,
-        input.isActive ?? null,
-        input.effectiveFrom ?? null,
-        input.effectiveTo === null,
-        input.effectiveTo ?? null,
-        input.summaryJson ?? null
-      ]
-    );
-
-    if (!result.rows[0]) {
-      return null;
-    }
-
-    return this.getRuleSetVersionDetail(ruleSetId, versionId);
   }
 
   public async getDefaultRuleSetByModule(groupId: string, module: ModuleType): Promise<RuleSetRecord | null> {
@@ -648,10 +642,25 @@ export class RuleRepository {
       updated_at: string;
     }>(
       `
-      SELECT id, module, code, name, description, status, is_default, created_at, updated_at
-      FROM rule_sets
-      WHERE group_id = $1 AND module = $2 AND is_default = TRUE AND status = 'ACTIVE'
-      ORDER BY updated_at DESC
+      SELECT rs.id,
+             rs.module,
+             rs.code,
+             rs.name,
+             COALESCE(latest_version.description, rs.description) AS description,
+             rs.status,
+             rs.is_default,
+             rs.created_at,
+             rs.updated_at
+      FROM rule_sets rs
+      LEFT JOIN LATERAL (
+        SELECT v.description
+        FROM rule_set_versions v
+        WHERE v.rule_set_id = rs.id
+        ORDER BY v.version_no DESC
+        LIMIT 1
+      ) AS latest_version ON TRUE
+      WHERE rs.group_id = $1 AND rs.module = $2 AND rs.is_default = TRUE AND rs.status = 'ACTIVE'
+      ORDER BY rs.updated_at DESC
       LIMIT 1
       `,
       [groupId, module]

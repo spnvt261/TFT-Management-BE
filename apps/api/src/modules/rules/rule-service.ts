@@ -1,15 +1,17 @@
-import { notFound } from "../../core/errors/app-error.js";
+import type { Pool } from "pg";
+import { AppError, conflict, notFound } from "../../core/errors/app-error.js";
+import { withTransaction } from "../../db/postgres/transaction.js";
+import { createRepositories, type RepositoryBundle } from "../../db/repositories/repository-factory.js";
 import type { ModuleType } from "../../domain/models/enums.js";
-import type { RepositoryBundle } from "../../db/repositories/repository-factory.js";
 import { RuleVersionCreationService } from "./rule-version-creation.service.js";
 import type { CreateRuleSetVersionRequest } from "./builder-types.js";
 
 export class RuleService {
-  private readonly versionCreationService: RuleVersionCreationService;
-
-  public constructor(private readonly repositories: RepositoryBundle, private readonly groupId: string) {
-    this.versionCreationService = new RuleVersionCreationService(repositories, groupId);
-  }
+  public constructor(
+    private readonly pool: Pool,
+    private readonly repositories: RepositoryBundle,
+    private readonly groupId: string
+  ) {}
 
   public listRuleSets(input: {
     modules?: ModuleType[];
@@ -34,68 +36,73 @@ export class RuleService {
     });
   }
 
-  public createRuleSet(input: {
+  public async createRule(input: {
     module: ModuleType;
-    code: string;
     name: string;
-    description: string | null;
     status: "ACTIVE" | "INACTIVE";
     isDefault: boolean;
+    version: Omit<CreateRuleSetVersionRequest, "effectiveFrom">;
   }) {
-    return this.repositories.rules.createRuleSet({
-      groupId: this.groupId,
-      module: input.module,
-      code: input.code,
-      name: input.name,
-      description: input.description,
-      status: input.status,
-      isDefault: input.isDefault
+    return withTransaction(this.pool, async (tx) => {
+      const txRepositories = createRepositories(tx);
+      const txVersionCreationService = new RuleVersionCreationService(txRepositories, this.groupId);
+
+      const ruleSet = await this.createRuleSetWithGeneratedCode(txRepositories, {
+        module: input.module,
+        name: input.name,
+        status: input.status,
+        isDefault: input.isDefault
+      });
+
+      await txVersionCreationService.create(ruleSet.id, {
+        ...input.version,
+        effectiveFrom: new Date().toISOString()
+      });
+
+      return this.buildRuleSetDetail(txRepositories, ruleSet.id);
     });
   }
 
   public async getRuleSet(ruleSetId: string) {
-    const ruleSet = await this.repositories.rules.getRuleSetById(this.groupId, ruleSetId);
-    if (!ruleSet) {
-      throw notFound("RULE_SET_NOT_FOUND", "Rule set not found");
-    }
-
-    const versions = await this.repositories.rules.listRuleSetVersions(ruleSetId);
-    return { ...ruleSet, versions };
+    return this.buildRuleSetDetail(this.repositories, ruleSetId);
   }
 
-  public async updateRuleSet(
+  public async editRule(
     ruleSetId: string,
-    input: { name?: string; description?: string | null; status?: "ACTIVE" | "INACTIVE"; isDefault?: boolean }
+    input: {
+      name?: string;
+      status?: "ACTIVE" | "INACTIVE";
+      isDefault?: boolean;
+      version: Omit<CreateRuleSetVersionRequest, "effectiveFrom">;
+    }
   ) {
-    const ruleSet = await this.repositories.rules.updateRuleSet(this.groupId, ruleSetId, input);
-    if (!ruleSet) {
-      throw notFound("RULE_SET_NOT_FOUND", "Rule set not found");
-    }
-    return ruleSet;
-  }
+    return withTransaction(this.pool, async (tx) => {
+      const txRepositories = createRepositories(tx);
+      const txVersionCreationService = new RuleVersionCreationService(txRepositories, this.groupId);
 
-  public createVersion(ruleSetId: string, input: CreateRuleSetVersionRequest) {
-    return this.versionCreationService.create(ruleSetId, input);
-  }
+      const existing = await txRepositories.rules.getRuleSetById(this.groupId, ruleSetId);
+      if (!existing) {
+        throw notFound("RULE_SET_NOT_FOUND", "Rule set not found");
+      }
 
-  public async getVersion(ruleSetId: string, versionId: string) {
-    const version = await this.repositories.rules.getRuleSetVersionDetail(ruleSetId, versionId);
-    if (!version) {
-      throw notFound("RULE_SET_VERSION_NOT_FOUND", "Rule set version not found");
-    }
-    return version;
-  }
+      if (input.name !== undefined || input.status !== undefined || input.isDefault !== undefined) {
+        const updated = await txRepositories.rules.updateRuleSet(this.groupId, ruleSetId, {
+          name: input.name,
+          status: input.status,
+          isDefault: input.isDefault
+        });
+        if (!updated) {
+          throw notFound("RULE_SET_NOT_FOUND", "Rule set not found");
+        }
+      }
 
-  public async updateVersion(
-    ruleSetId: string,
-    versionId: string,
-    input: { isActive?: boolean; effectiveFrom?: string; effectiveTo?: string | null; summaryJson?: unknown }
-  ) {
-    const version = await this.repositories.rules.updateRuleSetVersion(ruleSetId, versionId, input);
-    if (!version) {
-      throw notFound("RULE_SET_VERSION_NOT_FOUND", "Rule set version not found");
-    }
-    return version;
+      await txVersionCreationService.create(ruleSetId, {
+        ...input.version,
+        effectiveFrom: new Date().toISOString()
+      });
+
+      return this.buildRuleSetDetail(txRepositories, ruleSetId);
+    });
   }
 
   public async getDefaultByModule(module: ModuleType, participantCount?: number) {
@@ -117,5 +124,64 @@ export class RuleService {
     });
 
     return { ruleSet, activeVersion };
+  }
+
+  private async buildRuleSetDetail(repositories: RepositoryBundle, ruleSetId: string) {
+    const ruleSet = await repositories.rules.getRuleSetById(this.groupId, ruleSetId);
+    if (!ruleSet) {
+      throw notFound("RULE_SET_NOT_FOUND", "Rule set not found");
+    }
+
+    const versionSummaries = await repositories.rules.listRuleSetVersions(ruleSetId);
+    const versions = (
+      await Promise.all(versionSummaries.map((version) => repositories.rules.getRuleSetVersionDetail(ruleSetId, version.id)))
+    ).filter((version): version is NonNullable<typeof version> => version !== null);
+
+    return {
+      ...ruleSet,
+      latestVersion: versions[0] ?? null,
+      versions
+    };
+  }
+
+  private async createRuleSetWithGeneratedCode(
+    repositories: RepositoryBundle,
+    input: {
+      module: ModuleType;
+      name: string;
+      status: "ACTIVE" | "INACTIVE";
+      isDefault: boolean;
+    }
+  ) {
+    const maxAttempts = 20;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const code = this.generateRuleSetCode();
+      try {
+        return await repositories.rules.createRuleSet({
+          groupId: this.groupId,
+          module: input.module,
+          code,
+          name: input.name,
+          status: input.status,
+          isDefault: input.isDefault
+        });
+      } catch (error: unknown) {
+        if (error instanceof AppError && error.code === "RULE_SET_DUPLICATE") {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    throw conflict("RULE_SET_CODE_GENERATION_FAILED", "Unable to generate a unique rule code");
+  }
+
+  private generateRuleSetCode(): string {
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let result = "";
+    for (let index = 0; index < 6; index += 1) {
+      result += alphabet[Math.floor(Math.random() * alphabet.length)]!;
+    }
+    return result;
   }
 }

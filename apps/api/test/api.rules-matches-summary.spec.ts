@@ -12,31 +12,22 @@ describe("API - rules, matches, summaries", () => {
     }
   });
 
-  it("supports rule set and version endpoints", async () => {
+  it("supports rule endpoints with internal immutable versioning", async () => {
     app = await createApp(createMockServices());
 
     const listResponse = await app.inject({ method: "GET", url: "/api/v1/rule-sets?page=1&pageSize=20" });
     expect(listResponse.statusCode).toBe(200);
     expect(listResponse.json().data.length).toBeGreaterThanOrEqual(2);
 
-    const createRuleSetResponse = await app.inject({
+    const createRuleResponse = await app.inject({
       method: "POST",
       url: "/api/v1/rule-sets",
       payload: {
         module: "MATCH_STAKES",
-        code: "CUSTOM_MS",
         name: "Custom MS",
-        isDefault: false
-      }
-    });
-
-    expect(createRuleSetResponse.statusCode).toBe(201);
-    const ruleSetId = createRuleSetResponse.json().data.id;
-
-    const createBuilderVersionResponse = await app.inject({
-      method: "POST",
-      url: `/api/v1/rule-sets/${ruleSetId}/versions`,
-      payload: {
+        description: "Initial builder description",
+        status: "ACTIVE",
+        isDefault: false,
         participantCountMin: 3,
         participantCountMax: 3,
         isActive: true,
@@ -54,25 +45,27 @@ describe("API - rules, matches, summaries", () => {
       }
     });
 
-    expect(createBuilderVersionResponse.statusCode).toBe(201);
-    const builderVersionId = createBuilderVersionResponse.json().data.id;
-    expect(createBuilderVersionResponse.json().data.builderType).toBe("MATCH_STAKES_PAYOUT");
-    expect(createBuilderVersionResponse.json().data.builderConfig.participantCount).toBe(3);
-    expect(createBuilderVersionResponse.json().data.rules.length).toBeGreaterThan(0);
+    expect(createRuleResponse.statusCode).toBe(201);
+    const ruleSetId = createRuleResponse.json().data.id;
+    const firstVersionId = createRuleResponse.json().data.latestVersion.id;
+    expect(createRuleResponse.json().data.code).toMatch(/^[A-Z]{6}$/);
+    expect(createRuleResponse.json().data.latestVersion.builderType).toBe("MATCH_STAKES_PAYOUT");
+    expect(createRuleResponse.json().data.latestVersion.builderConfig.participantCount).toBe(3);
 
-    const builderDetailResponse = await app.inject({
+    const detailAfterCreateResponse = await app.inject({
       method: "GET",
-      url: `/api/v1/rule-sets/${ruleSetId}/versions/${builderVersionId}`
+      url: `/api/v1/rule-sets/${ruleSetId}`
     });
-    expect(builderDetailResponse.statusCode).toBe(200);
-    expect(builderDetailResponse.json().data.builderType).toBe("MATCH_STAKES_PAYOUT");
-    expect(builderDetailResponse.json().data.builderConfig.participantCount).toBe(3);
-    expect(builderDetailResponse.json().data.rules.length).toBeGreaterThan(0);
+    expect(detailAfterCreateResponse.statusCode).toBe(200);
+    expect(detailAfterCreateResponse.json().data.latestVersion.id).toBe(firstVersionId);
+    expect(detailAfterCreateResponse.json().data.versions).toHaveLength(1);
 
-    const createRawVersionResponse = await app.inject({
-      method: "POST",
-      url: `/api/v1/rule-sets/${ruleSetId}/versions`,
+    const editRuleResponse = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/rule-sets/${ruleSetId}`,
       payload: {
+        name: "Custom MS - Edited",
+        description: "Raw version description",
         participantCountMin: 3,
         participantCountMax: 4,
         isActive: true,
@@ -103,22 +96,70 @@ describe("API - rules, matches, summaries", () => {
       }
     });
 
-    expect(createRawVersionResponse.statusCode).toBe(201);
-    expect(createRawVersionResponse.json().data.builderType).toBeNull();
-    const versionId = createRawVersionResponse.json().data.id;
+    expect(editRuleResponse.statusCode).toBe(200);
+    expect(editRuleResponse.json().data.latestVersion.id).not.toBe(firstVersionId);
+    expect(editRuleResponse.json().data.latestVersion.versionNo).toBeGreaterThan(1);
+    expect(editRuleResponse.json().data.latestVersion.rules[0].name).toBe("Rule 1");
+    expect(editRuleResponse.json().data.latestVersion.rules[0].actions[0].amountVnd).toBe(10000);
 
-    const detailVersionResponse = await app.inject({
-      method: "GET",
-      url: `/api/v1/rule-sets/${ruleSetId}/versions/${versionId}`
+    const latestVersionId = editRuleResponse.json().data.latestVersion.id;
+    const previousVersion = editRuleResponse.json().data.versions.find((item: { id: string }) => item.id === firstVersionId);
+    expect(previousVersion).toBeTruthy();
+    expect(previousVersion.builderType).toBe("MATCH_STAKES_PAYOUT");
+    expect(previousVersion.id).toBe(firstVersionId);
+
+    const editAgainResponse = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/rule-sets/${ruleSetId}`,
+      payload: {
+        description: "Second raw version description",
+        participantCountMin: 3,
+        participantCountMax: 4,
+        isActive: true,
+        rules: [
+          {
+            code: "R1",
+            name: "Rule 1 - Edited",
+            ruleKind: "BASE_RELATIVE_RANK",
+            conditions: [
+              {
+                conditionKey: "participantCount",
+                operator: "EQ",
+                valueJson: 3
+              }
+            ],
+            actions: [
+              {
+                actionType: "TRANSFER",
+                amountVnd: 20000,
+                sourceSelectorType: "PLAYER_BY_RELATIVE_RANK",
+                sourceSelectorJson: { relativeRank: 2 },
+                destinationSelectorType: "PLAYER_BY_RELATIVE_RANK",
+                destinationSelectorJson: { relativeRank: 1 }
+              }
+            ]
+          }
+        ]
+      }
     });
-    expect(detailVersionResponse.statusCode).toBe(200);
-    expect(detailVersionResponse.json().data).toHaveProperty("builderType");
-    expect(detailVersionResponse.json().data).toHaveProperty("builderConfig");
+    expect(editAgainResponse.statusCode).toBe(200);
+    expect(editAgainResponse.json().data.latestVersion.id).not.toBe(latestVersionId);
+    expect(editAgainResponse.json().data.latestVersion.rules[0].name).toBe("Rule 1 - Edited");
+    expect(editAgainResponse.json().data.latestVersion.rules[0].actions[0].amountVnd).toBe(20000);
+
+    const ruleSetDetailAfterEditResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/rule-sets/${ruleSetId}`
+    });
+    expect(ruleSetDetailAfterEditResponse.statusCode).toBe(200);
+    expect(ruleSetDetailAfterEditResponse.json().data.latestVersion.id).toBe(editAgainResponse.json().data.latestVersion.id);
+    expect(ruleSetDetailAfterEditResponse.json().data.versions.length).toBeGreaterThanOrEqual(3);
 
     const conflictModeResponse = await app.inject({
-      method: "POST",
-      url: `/api/v1/rule-sets/${ruleSetId}/versions`,
+      method: "PATCH",
+      url: `/api/v1/rule-sets/${ruleSetId}`,
       payload: {
+        description: "Conflict version",
         participantCountMin: 3,
         participantCountMax: 3,
         builderType: "MATCH_STAKES_PAYOUT",
@@ -159,6 +200,19 @@ describe("API - rules, matches, summaries", () => {
     });
     expect(conflictModeResponse.statusCode).toBe(400);
 
+    const removedCreateVersionApiResponse = await app.inject({
+      method: "POST",
+      url: `/api/v1/rule-sets/${ruleSetId}/versions`,
+      payload: {}
+    });
+    expect(removedCreateVersionApiResponse.statusCode).toBe(404);
+
+    const removedGetVersionApiResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/rule-sets/${ruleSetId}/versions/${firstVersionId}`
+    });
+    expect(removedGetVersionApiResponse.statusCode).toBe(404);
+
     const defaultResponse = await app.inject({
       method: "GET",
       url: "/api/v1/rule-sets/default/by-module/MATCH_STAKES"
@@ -188,10 +242,23 @@ describe("API - rules, matches, summaries", () => {
       url: "/api/v1/rule-sets",
       payload: {
         module: "MATCH_STAKES",
-        code: "MS_INACTIVE_FILTER",
         name: "Alpha Filter Rule Set",
         status: "INACTIVE",
-        isDefault: false
+        isDefault: false,
+        description: "Alpha filter description",
+        participantCountMin: 3,
+        participantCountMax: 3,
+        isActive: true,
+        builderType: "MATCH_STAKES_PAYOUT",
+        builderConfig: {
+          participantCount: 3,
+          winnerCount: 1,
+          payouts: [{ relativeRank: 1, amountVnd: 100000 }],
+          losses: [
+            { relativeRank: 2, amountVnd: 50000 },
+            { relativeRank: 3, amountVnd: 50000 }
+          ]
+        }
       }
     });
     expect(createInactiveMatchStakes.statusCode).toBe(201);
@@ -201,10 +268,37 @@ describe("API - rules, matches, summaries", () => {
       url: "/api/v1/rule-sets",
       payload: {
         module: "GROUP_FUND",
-        code: "GF_INACTIVE_FILTER",
         name: "Beta Filter Rule Set",
         status: "INACTIVE",
-        isDefault: false
+        isDefault: false,
+        description: "Beta filter description",
+        participantCountMin: 3,
+        participantCountMax: 3,
+        isActive: true,
+        rules: [
+          {
+            code: "GF_RULE_1",
+            name: "GF Rule 1",
+            ruleKind: "FUND_CONTRIBUTION",
+            conditions: [
+              {
+                conditionKey: "participantCount",
+                operator: "EQ",
+                valueJson: 3
+              }
+            ],
+            actions: [
+              {
+                actionType: "POST_TO_FUND",
+                amountVnd: 10000,
+                sourceSelectorType: "SUBJECT_PLAYER",
+                sourceSelectorJson: {},
+                destinationSelectorType: "FUND_ACCOUNT",
+                destinationSelectorJson: {}
+              }
+            ]
+          }
+        ]
       }
     });
     expect(createInactiveGroupFund.statusCode).toBe(201);
