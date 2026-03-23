@@ -12,17 +12,23 @@ export class RuleService {
   }
 
   public listRuleSets(input: {
-    module?: ModuleType;
+    modules?: ModuleType[];
     status?: "ACTIVE" | "INACTIVE";
     isDefault?: boolean;
+    search?: string;
+    from?: string;
+    to?: string;
     page: number;
     pageSize: number;
   }) {
     return this.repositories.rules.listRuleSets({
       groupId: this.groupId,
-      module: input.module,
+      modules: input.modules,
       status: input.status,
       isDefault: input.isDefault,
+      search: input.search,
+      from: input.from,
+      to: input.to,
       page: input.page,
       pageSize: input.pageSize
     });

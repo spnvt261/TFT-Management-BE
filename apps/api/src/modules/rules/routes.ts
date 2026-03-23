@@ -7,10 +7,56 @@ import { moduleTypeSchema, ruleStatusSchema, ruleKindSchema, conditionOperatorSc
 import { errorResponseSchemas, paginationMetaSchema, successResponseSchema, toSwaggerSchema } from "../../core/docs/swagger.js";
 import { matchStakesBuilderConfigInputSchema, ruleBuilderTypeSchema } from "./builder-types.js";
 
+const modulesQuerySchema = z
+  .preprocess((value) => {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+
+    if (Array.isArray(value)) {
+      const normalized = value
+        .flatMap((item) => String(item).split(","))
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+      return normalized.length > 0 ? normalized : undefined;
+    }
+
+    if (typeof value === "string") {
+      const normalized = value
+        .split(",")
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+      return normalized.length > 0 ? normalized : undefined;
+    }
+
+    return value;
+  }, z.array(moduleTypeSchema).min(1))
+  .optional();
+
+const searchQuerySchema = z
+  .preprocess((value) => {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+
+    if (typeof value === "string") {
+      const normalized = value.trim();
+      return normalized.length > 0 ? normalized : undefined;
+    }
+
+    return value;
+  }, z.string().max(150))
+  .optional();
+
 const listRuleSetsQuerySchema = z.object({
   module: moduleTypeSchema.optional(),
+  modules: modulesQuerySchema,
   status: ruleStatusSchema.optional(),
   isDefault: z.coerce.boolean().optional(),
+  default: z.coerce.boolean().optional(),
+  search: searchQuerySchema,
+  from: z.string().datetime().optional(),
+  to: z.string().datetime().optional(),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().positive().max(100).default(20)
 });
@@ -177,7 +223,16 @@ export async function registerRuleRoutes(app: FastifyInstance, services: AppServ
     },
     async (request) => {
       const query = listRuleSetsQuerySchema.parse(request.query);
-      const result = await services.rules.listRuleSets(query);
+      const result = await services.rules.listRuleSets({
+        modules: query.modules ?? (query.module ? [query.module] : undefined),
+        status: query.status,
+        isDefault: query.isDefault ?? query.default,
+        search: query.search,
+        from: query.from,
+        to: query.to,
+        page: query.page,
+        pageSize: query.pageSize
+      });
 
       return ok(result.items, {
         page: query.page,

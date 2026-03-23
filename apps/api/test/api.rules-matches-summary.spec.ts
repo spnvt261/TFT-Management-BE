@@ -180,6 +180,76 @@ describe("API - rules, matches, summaries", () => {
     expect(invalidParticipantCountResponse.statusCode).toBe(400);
   });
 
+  it("supports rule list filters by status/default/modules/search/date", async () => {
+    app = await createApp(createMockServices());
+
+    const createInactiveMatchStakes = await app.inject({
+      method: "POST",
+      url: "/api/v1/rule-sets",
+      payload: {
+        module: "MATCH_STAKES",
+        code: "MS_INACTIVE_FILTER",
+        name: "Alpha Filter Rule Set",
+        status: "INACTIVE",
+        isDefault: false
+      }
+    });
+    expect(createInactiveMatchStakes.statusCode).toBe(201);
+
+    const createInactiveGroupFund = await app.inject({
+      method: "POST",
+      url: "/api/v1/rule-sets",
+      payload: {
+        module: "GROUP_FUND",
+        code: "GF_INACTIVE_FILTER",
+        name: "Beta Filter Rule Set",
+        status: "INACTIVE",
+        isDefault: false
+      }
+    });
+    expect(createInactiveGroupFund.statusCode).toBe(201);
+
+    const statusResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/rule-sets?status=INACTIVE&page=1&pageSize=20"
+    });
+    expect(statusResponse.statusCode).toBe(200);
+    expect(statusResponse.json().data.length).toBeGreaterThanOrEqual(2);
+    expect(statusResponse.json().data.every((item: { status: string }) => item.status === "INACTIVE")).toBe(true);
+
+    const defaultAliasResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/rule-sets?default=true&page=1&pageSize=20"
+    });
+    expect(defaultAliasResponse.statusCode).toBe(200);
+    expect(defaultAliasResponse.json().data.length).toBeGreaterThan(0);
+    expect(defaultAliasResponse.json().data.every((item: { isDefault: boolean }) => item.isDefault === true)).toBe(true);
+
+    const modulesResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/rule-sets?modules=GROUP_FUND&page=1&pageSize=20"
+    });
+    expect(modulesResponse.statusCode).toBe(200);
+    expect(modulesResponse.json().data.length).toBeGreaterThan(0);
+    expect(modulesResponse.json().data.every((item: { module: string }) => item.module === "GROUP_FUND")).toBe(true);
+
+    const searchResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/rule-sets?search=Alpha&page=1&pageSize=20"
+    });
+    expect(searchResponse.statusCode).toBe(200);
+    expect(searchResponse.json().data.length).toBeGreaterThan(0);
+    expect(searchResponse.json().data.every((item: { name: string }) => item.name.toLowerCase().includes("alpha"))).toBe(true);
+
+    const dateResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/rule-sets?from=2100-01-01T00:00:00.000Z&page=1&pageSize=20"
+    });
+    expect(dateResponse.statusCode).toBe(200);
+    expect(dateResponse.json().data.length).toBe(0);
+    expect(dateResponse.json().meta.total).toBe(0);
+  });
+
   it("validates match creation and supports create/detail/preset/summaries", async () => {
     app = await createApp(createMockServices());
 

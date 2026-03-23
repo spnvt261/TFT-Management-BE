@@ -252,11 +252,39 @@ export function createMockServices(): AppServices {
       }
     } as any,
     rules: {
-      listRuleSets: async ({ module, page, pageSize }) => {
+      listRuleSets: async ({ module, modules, status, isDefault, search, from, to, page, pageSize }) => {
         let items = Array.from(rules.values());
-        if (module) {
-          items = items.filter((item) => item.module === module);
+
+        const moduleFilters = Array.isArray(modules) && modules.length > 0 ? modules : module ? [module] : undefined;
+        if (moduleFilters && moduleFilters.length > 0) {
+          items = items.filter((item) => moduleFilters.includes(item.module));
         }
+
+        if (status) {
+          items = items.filter((item) => item.status === status);
+        }
+
+        if (isDefault !== undefined) {
+          items = items.filter((item) => item.isDefault === isDefault);
+        }
+
+        if (search) {
+          const normalizedSearch = String(search).toLowerCase();
+          items = items.filter((item) => item.name.toLowerCase().includes(normalizedSearch));
+        }
+
+        if (from) {
+          const fromTime = new Date(from).getTime();
+          items = items.filter((item) => new Date(item.createdAt).getTime() >= fromTime);
+        }
+
+        if (to) {
+          const toTime = new Date(to).getTime();
+          items = items.filter((item) => new Date(item.createdAt).getTime() <= toTime);
+        }
+
+        items = items.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+
         const start = (page - 1) * pageSize;
         return {
           items: items.slice(start, start + pageSize),

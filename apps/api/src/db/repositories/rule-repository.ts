@@ -5,9 +5,12 @@ import type { ModuleType } from "../../domain/models/enums.js";
 
 export interface ListRuleSetsInput {
   groupId: string;
-  module?: ModuleType;
+  modules?: ModuleType[];
   status?: "ACTIVE" | "INACTIVE";
   isDefault?: boolean;
+  search?: string;
+  from?: string;
+  to?: string;
   page: number;
   pageSize: number;
 }
@@ -126,9 +129,9 @@ export class RuleRepository {
     const conditions = ["group_id = $1"];
     const params: unknown[] = [input.groupId];
 
-    if (input.module) {
-      params.push(input.module);
-      conditions.push(`module = $${params.length}`);
+    if (input.modules && input.modules.length > 0) {
+      params.push(input.modules);
+      conditions.push(`module = ANY($${params.length}::module_type[])`);
     }
 
     if (input.status) {
@@ -139,6 +142,21 @@ export class RuleRepository {
     if (input.isDefault !== undefined) {
       params.push(input.isDefault);
       conditions.push(`is_default = $${params.length}`);
+    }
+
+    if (input.search) {
+      params.push(`%${input.search}%`);
+      conditions.push(`name ILIKE $${params.length}`);
+    }
+
+    if (input.from) {
+      params.push(input.from);
+      conditions.push(`created_at >= $${params.length}`);
+    }
+
+    if (input.to) {
+      params.push(input.to);
+      conditions.push(`created_at <= $${params.length}`);
     }
 
     const whereSql = conditions.join(" AND ");
