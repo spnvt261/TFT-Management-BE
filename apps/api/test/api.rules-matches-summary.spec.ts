@@ -107,6 +107,8 @@ describe("API - rules, matches, summaries", () => {
     expect(previousVersion).toBeTruthy();
     expect(previousVersion.builderType).toBe("MATCH_STAKES_PAYOUT");
     expect(previousVersion.id).toBe(firstVersionId);
+    expect(previousVersion.isActive).toBe(false);
+    expect(previousVersion.effectiveTo).not.toBeNull();
 
     const editAgainResponse = await app.inject({
       method: "PATCH",
@@ -146,6 +148,11 @@ describe("API - rules, matches, summaries", () => {
     expect(editAgainResponse.json().data.latestVersion.id).not.toBe(latestVersionId);
     expect(editAgainResponse.json().data.latestVersion.rules[0].name).toBe("Rule 1 - Edited");
     expect(editAgainResponse.json().data.latestVersion.rules[0].actions[0].amountVnd).toBe(20000);
+    const lastVersionAfterSecondEdit = editAgainResponse
+      .json()
+      .data.versions.find((item: { id: string }) => item.id === latestVersionId);
+    expect(lastVersionAfterSecondEdit.isActive).toBe(false);
+    expect(lastVersionAfterSecondEdit.effectiveTo).not.toBeNull();
 
     const ruleSetDetailAfterEditResponse = await app.inject({
       method: "GET",

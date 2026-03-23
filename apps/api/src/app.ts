@@ -23,7 +23,9 @@ export async function createApp(services: AppServices) {
   });
 
   await app.register(cors, {
-    origin: "*"
+    origin: "*",
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
   });
 
   registerErrorHandler(app);

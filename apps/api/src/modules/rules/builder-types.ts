@@ -101,3 +101,15 @@ export interface CreateRuleSetVersionRequest {
   builderConfig?: unknown | null;
   rules?: RuleVersionRuleInput[];
 }
+
+export interface EditRuleSetVersionRequest {
+  description?: string | null;
+  participantCountMin?: number;
+  participantCountMax?: number;
+  effectiveTo?: string | null;
+  isActive?: boolean;
+  summaryJson?: unknown;
+  builderType?: RuleBuilderType | null;
+  builderConfig?: unknown | null;
+  rules?: RuleVersionRuleInput[];
+}

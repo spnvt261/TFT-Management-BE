@@ -422,6 +422,22 @@ export class RuleRepository {
 
     const version = versionResult.rows[0]!;
 
+    await this.db.query(
+      `
+      UPDATE rule_set_versions
+      SET
+        is_active = FALSE,
+        effective_to = CASE
+          WHEN effective_to IS NULL OR effective_to > $2 THEN $2
+          ELSE effective_to
+        END
+      WHERE rule_set_id = $1
+        AND id <> $3
+        AND is_active = TRUE
+      `,
+      [input.ruleSetId, input.effectiveFrom, version.id]
+    );
+
     for (const rule of input.rules) {
       const ruleResult = await this.db.query<{
         id: string;

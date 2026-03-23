@@ -107,9 +107,10 @@ const ruleSchema = z.object({
 
 const ruleVersionMutationSchema = z
   .object({
-    description: z.string().nullable(),
-    participantCountMin: z.coerce.number().int().min(2).max(8),
-    participantCountMax: z.coerce.number().int().min(2).max(8),
+    description: z.string().nullable().optional(),
+    participantCount: z.coerce.number().int().min(2).max(8).optional(),
+    participantCountMin: z.coerce.number().int().min(2).max(8).optional(),
+    participantCountMax: z.coerce.number().int().min(2).max(8).optional(),
     effectiveTo: z.string().datetime().nullable().optional(),
     isActive: z.boolean().optional().default(true),
     summaryJson: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -117,26 +118,57 @@ const ruleVersionMutationSchema = z
     builderConfig: z.union([matchStakesBuilderConfigInputSchema, z.record(z.string(), z.unknown())]).nullable().optional(),
     rules: z.array(ruleSchema).min(1).optional()
   })
-  .refine((value) => value.participantCountMin <= value.participantCountMax, {
-    message: "participantCountMin must be less than or equal to participantCountMax"
+  .superRefine((value, ctx) => {
+    const resolvedMin = value.participantCountMin ?? value.participantCount;
+    const resolvedMax = value.participantCountMax ?? value.participantCount;
+
+    if (resolvedMin !== undefined && resolvedMax !== undefined && resolvedMin > resolvedMax) {
+      ctx.addIssue({
+        code: "custom",
+        message: "participantCountMin must be less than or equal to participantCountMax"
+      });
+    }
+
+    if (
+      value.participantCount !== undefined &&
+      (resolvedMin !== value.participantCount || resolvedMax !== value.participantCount)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "participantCount must match participantCountMin and participantCountMax when provided together"
+      });
+    }
   });
 
 const createRuleSetSchema = ruleVersionMutationSchema
-  .extend({
+  .safeExtend({
     module: moduleTypeSchema,
     name: z.string().min(1).max(150),
+    description: z.string().nullable(),
     status: ruleStatusSchema.optional().default("ACTIVE"),
     isDefault: z.boolean().optional().default(false)
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    const resolvedMin = value.participantCountMin ?? value.participantCount;
+    const resolvedMax = value.participantCountMax ?? value.participantCount;
+    if (resolvedMin === undefined || resolvedMax === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: "participantCountMin/participantCountMax or participantCount is required"
+      });
+    }
+  });
 
 const updateRuleSetSchema = ruleVersionMutationSchema
-  .extend({
+  .safeExtend({
+    module: moduleTypeSchema.optional(),
+    code: z.string().min(1).max(80).optional(),
     name: z.string().min(1).max(150).optional(),
     status: ruleStatusSchema.optional(),
     isDefault: z.boolean().optional()
   })
-  .strict();
+  .passthrough();
 
 const ruleSetIdParamSchema = z.object({ ruleSetId: uuidSchema });
 const moduleParamSchema = z.object({ module: moduleTypeSchema });
@@ -246,6 +278,39 @@ function mapRuleInput(input: z.infer<typeof ruleSchema>) {
   };
 }
 
+function resolveParticipantRange(input: {
+  participantCount?: number;
+  participantCountMin?: number;
+  participantCountMax?: number;
+}) {
+  const participantCountMin = input.participantCountMin ?? input.participantCount;
+  const participantCountMax = input.participantCountMax ?? input.participantCount;
+
+  if (participantCountMin === undefined || participantCountMax === undefined) {
+    throw new Error("participant range was not resolved");
+  }
+
+  return { participantCountMin, participantCountMax };
+}
+
+function resolveOptionalParticipantRange(input: {
+  participantCount?: number;
+  participantCountMin?: number;
+  participantCountMax?: number;
+}) {
+  if (input.participantCount !== undefined) {
+    return {
+      participantCountMin: input.participantCount,
+      participantCountMax: input.participantCount
+    };
+  }
+
+  return {
+    participantCountMin: input.participantCountMin,
+    participantCountMax: input.participantCountMax
+  };
+}
+
 export async function registerRuleRoutes(app: FastifyInstance, services: AppServices): Promise<void> {
   app.get(
     "/rule-sets",
@@ -299,6 +364,7 @@ export async function registerRuleRoutes(app: FastifyInstance, services: AppServ
     },
     async (request, reply) => {
       const input = createRuleSetSchema.parse(request.body);
+      const { participantCountMin, participantCountMax } = resolveParticipantRange(input);
       const created = await services.rules.createRule({
         module: input.module,
         name: input.name,
@@ -306,8 +372,8 @@ export async function registerRuleRoutes(app: FastifyInstance, services: AppServ
         isDefault: input.isDefault,
         version: {
           description: input.description,
-          participantCountMin: input.participantCountMin,
-          participantCountMax: input.participantCountMax,
+          participantCountMin,
+          participantCountMax,
           effectiveTo: input.effectiveTo ?? null,
           isActive: input.isActive,
           summaryJson: input.summaryJson ?? null,
@@ -360,16 +426,19 @@ export async function registerRuleRoutes(app: FastifyInstance, services: AppServ
     async (request) => {
       const params = ruleSetIdParamSchema.parse(request.params);
       const input = updateRuleSetSchema.parse(request.body);
+      const { participantCountMin, participantCountMax } = resolveOptionalParticipantRange(input);
 
       return ok(
         await services.rules.editRule(params.ruleSetId, {
+          module: input.module,
+          code: input.code,
           name: input.name,
           status: input.status,
           isDefault: input.isDefault,
           version: {
             description: input.description,
-            participantCountMin: input.participantCountMin,
-            participantCountMax: input.participantCountMax,
+            participantCountMin,
+            participantCountMax,
             effectiveTo: input.effectiveTo ?? null,
             isActive: input.isActive,
             summaryJson: input.summaryJson ?? null,

@@ -436,6 +436,14 @@ export function createMockServices(): AppServices {
           throw new AppError(404, "RULE_SET_NOT_FOUND", "Rule set not found");
         }
 
+        if (input.module !== undefined && input.module !== item.module) {
+          throw new AppError(400, "RULE_SET_MODULE_IMMUTABLE", "module cannot be changed when editing a rule");
+        }
+
+        if (input.code !== undefined && input.code !== item.code) {
+          throw new AppError(400, "RULE_SET_CODE_IMMUTABLE", "code cannot be changed when editing a rule");
+        }
+
         if (input.isDefault === true) {
           for (const existing of rules.values()) {
             if (existing.module === item.module) {
@@ -449,17 +457,63 @@ export function createMockServices(): AppServices {
         item.isDefault = input.isDefault ?? item.isDefault;
         item.updatedAt = new Date().toISOString();
 
-        const newVersion = createVersionForRuleSet(item, {
-          description: input.version.description,
-          participantCountMin: input.version.participantCountMin,
-          participantCountMax: input.version.participantCountMax,
-          effectiveTo: input.version.effectiveTo,
-          isActive: input.version.isActive,
-          summaryJson: input.version.summaryJson,
+        const baseVersion = item.versions[0];
+        if (!baseVersion) {
+          throw new AppError(404, "RULE_SET_VERSION_NOT_FOUND", "Rule set version not found");
+        }
+
+        const builderFieldsProvided = input.version.builderType !== undefined || input.version.builderConfig !== undefined;
+        const rulesProvided = input.version.rules !== undefined;
+
+        const nextVersionInput = {
+          description: input.version.description === undefined ? baseVersion.description : input.version.description,
+          participantCountMin: input.version.participantCountMin ?? baseVersion.participantCountMin,
+          participantCountMax: input.version.participantCountMax ?? baseVersion.participantCountMax,
+          effectiveTo: input.version.effectiveTo === undefined ? baseVersion.effectiveTo : input.version.effectiveTo,
+          isActive: input.version.isActive ?? baseVersion.isActive,
+          summaryJson: input.version.summaryJson === undefined ? baseVersion.summaryJson : input.version.summaryJson,
           builderType: input.version.builderType,
           builderConfig: input.version.builderConfig,
           rules: input.version.rules
+        };
+
+        if (rulesProvided && !builderFieldsProvided) {
+          nextVersionInput.builderType = null;
+          nextVersionInput.builderConfig = null;
+        } else if (builderFieldsProvided) {
+          nextVersionInput.builderType = input.version.builderType === undefined ? baseVersion.builderType : input.version.builderType;
+          nextVersionInput.builderConfig =
+            input.version.builderConfig === undefined ? baseVersion.builderConfig : input.version.builderConfig;
+        } else if (baseVersion.builderType !== null || baseVersion.builderConfig !== null) {
+          nextVersionInput.builderType = baseVersion.builderType;
+          nextVersionInput.builderConfig = baseVersion.builderConfig;
+          nextVersionInput.rules = undefined;
+        } else {
+          nextVersionInput.builderType = null;
+          nextVersionInput.builderConfig = null;
+          nextVersionInput.rules = baseVersion.rules;
+        }
+
+        const newVersion = createVersionForRuleSet(item, {
+          description: nextVersionInput.description,
+          participantCountMin: nextVersionInput.participantCountMin,
+          participantCountMax: nextVersionInput.participantCountMax,
+          effectiveTo: nextVersionInput.effectiveTo,
+          isActive: nextVersionInput.isActive,
+          summaryJson: nextVersionInput.summaryJson,
+          builderType: nextVersionInput.builderType,
+          builderConfig: nextVersionInput.builderConfig,
+          rules: nextVersionInput.rules
         });
+
+        for (const version of item.versions) {
+          if (version.isActive) {
+            version.isActive = false;
+            if (!version.effectiveTo || version.effectiveTo > newVersion.effectiveFrom) {
+              version.effectiveTo = newVersion.effectiveFrom;
+            }
+          }
+        }
 
         item.versions.unshift(newVersion);
         rules.set(ruleSetId, item);

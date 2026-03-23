@@ -1,10 +1,10 @@
 import type { Pool } from "pg";
-import { AppError, conflict, notFound } from "../../core/errors/app-error.js";
+import { AppError, badRequest, conflict, notFound } from "../../core/errors/app-error.js";
 import { withTransaction } from "../../db/postgres/transaction.js";
 import { createRepositories, type RepositoryBundle } from "../../db/repositories/repository-factory.js";
 import type { ModuleType } from "../../domain/models/enums.js";
 import { RuleVersionCreationService } from "./rule-version-creation.service.js";
-import type { CreateRuleSetVersionRequest } from "./builder-types.js";
+import type { CreateRuleSetVersionRequest, EditRuleSetVersionRequest } from "./builder-types.js";
 
 export class RuleService {
   public constructor(
@@ -70,10 +70,12 @@ export class RuleService {
   public async editRule(
     ruleSetId: string,
     input: {
+      module?: ModuleType;
+      code?: string;
       name?: string;
       status?: "ACTIVE" | "INACTIVE";
       isDefault?: boolean;
-      version: Omit<CreateRuleSetVersionRequest, "effectiveFrom">;
+      version: EditRuleSetVersionRequest;
     }
   ) {
     return withTransaction(this.pool, async (tx) => {
@@ -83,6 +85,14 @@ export class RuleService {
       const existing = await txRepositories.rules.getRuleSetById(this.groupId, ruleSetId);
       if (!existing) {
         throw notFound("RULE_SET_NOT_FOUND", "Rule set not found");
+      }
+
+      if (input.module !== undefined && input.module !== existing.module) {
+        throw badRequest("RULE_SET_MODULE_IMMUTABLE", "module cannot be changed when editing a rule");
+      }
+
+      if (input.code !== undefined && input.code !== existing.code) {
+        throw badRequest("RULE_SET_CODE_IMMUTABLE", "code cannot be changed when editing a rule");
       }
 
       if (input.name !== undefined || input.status !== undefined || input.isDefault !== undefined) {
@@ -96,10 +106,13 @@ export class RuleService {
         }
       }
 
-      await txVersionCreationService.create(ruleSetId, {
-        ...input.version,
-        effectiveFrom: new Date().toISOString()
-      });
+      const versionSummaries = await txRepositories.rules.listRuleSetVersions(ruleSetId);
+      const latestVersionId = versionSummaries[0]?.id;
+      if (!latestVersionId) {
+        throw notFound("RULE_SET_VERSION_NOT_FOUND", "Rule set version not found");
+      }
+
+      await txVersionCreationService.createFromExistingVersion(ruleSetId, latestVersionId, input.version);
 
       return this.buildRuleSetDetail(txRepositories, ruleSetId);
     });
