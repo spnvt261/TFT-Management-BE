@@ -35,6 +35,7 @@ export function successResponseSchema(dataSchema: z.ZodTypeAny, metaSchema?: z.Z
 export const errorResponseSchemas: Record<number, Record<string, unknown>> = {
   400: toSwaggerSchema(apiErrorSchema),
   404: toSwaggerSchema(apiErrorSchema),
+  409: toSwaggerSchema(apiErrorSchema),
   422: toSwaggerSchema(apiErrorSchema),
   500: toSwaggerSchema(apiErrorSchema)
 };
@@ -45,7 +46,7 @@ export const openApiTags = [
   { name: "Rules", description: "Rule management with internal immutable versioning" },
   { name: "Matches", description: "Match creation, listing, detail and void" },
   { name: "Presets", description: "Recent match presets by module" },
-  { name: "Match Stakes", description: "Match stakes summary, ledger and match history" },
+  { name: "Match Stakes", description: "Match stakes debt periods, settlement tracking, summary, ledger and match history" },
   { name: "Group Fund", description: "Group fund summary, ledger and match history" },
   { name: "Dashboard", description: "Dashboard overview metrics" }
 ];

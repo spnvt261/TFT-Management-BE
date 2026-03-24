@@ -41,6 +41,9 @@ export type SelectorType = (typeof selectorTypeValues)[number];
 export const accountTypeValues = ["PLAYER_DEBT", "FUND_MAIN", "PLAYER_FUND_OBLIGATION", "SYSTEM_HOLDING"] as const;
 export type AccountType = (typeof accountTypeValues)[number];
 
+export const debtPeriodStatusValues = ["OPEN", "CLOSED"] as const;
+export type DebtPeriodStatus = (typeof debtPeriodStatusValues)[number];
+
 export const moduleTypeSchema = z.enum(moduleTypeValues);
 export const matchStatusSchema = z.enum(matchStatusValues);
 export const ruleStatusSchema = z.enum(ruleStatusValues);
@@ -49,3 +52,4 @@ export const conditionOperatorSchema = z.enum(conditionOperatorValues);
 export const actionTypeSchema = z.enum(actionTypeValues);
 export const selectorTypeSchema = z.enum(selectorTypeValues);
 export const accountTypeSchema = z.enum(accountTypeValues);
+export const debtPeriodStatusSchema = z.enum(debtPeriodStatusValues);

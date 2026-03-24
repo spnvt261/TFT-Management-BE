@@ -458,4 +458,112 @@ describe("API - rules, matches, summaries", () => {
     const dashboardResponse = await app.inject({ method: "GET", url: "/api/v1/dashboard/overview" });
     expect(dashboardResponse.statusCode).toBe(200);
   });
+
+  it("supports debt-period-based match-stakes endpoints", async () => {
+    app = await createApp(createMockServices());
+
+    const createMatchResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/matches",
+      payload: {
+        module: "MATCH_STAKES",
+        ruleSetId: "20000000-0000-4000-8000-000000000001",
+        ruleSetVersionId: "30000000-0000-4000-8000-000000000001",
+        participants: [
+          { playerId: "10000000-0000-4000-8000-000000000001", tftPlacement: 1 },
+          { playerId: "10000000-0000-4000-8000-000000000002", tftPlacement: 4 },
+          { playerId: "10000000-0000-4000-8000-000000000003", tftPlacement: 8 }
+        ]
+      }
+    });
+    expect(createMatchResponse.statusCode).toBe(201);
+    const createdMatch = createMatchResponse.json().data;
+
+    const currentPeriodResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/match-stakes/debt-periods/current"
+    });
+    expect(currentPeriodResponse.statusCode).toBe(200);
+    const currentPeriod = currentPeriodResponse.json().data.period;
+
+    const listPeriodsResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/match-stakes/debt-periods?page=1&pageSize=20"
+    });
+    expect(listPeriodsResponse.statusCode).toBe(200);
+    expect(listPeriodsResponse.json().data.length).toBeGreaterThanOrEqual(1);
+
+    const detailResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/match-stakes/debt-periods/${currentPeriod.id}`
+    });
+    expect(detailResponse.statusCode).toBe(200);
+
+    const createFirstSettlementResponse = await app.inject({
+      method: "POST",
+      url: `/api/v1/match-stakes/debt-periods/${currentPeriod.id}/settlements`,
+      payload: {
+        lines: [
+          {
+            payerPlayerId: "10000000-0000-4000-8000-000000000002",
+            receiverPlayerId: "10000000-0000-4000-8000-000000000001",
+            amountVnd: 50000
+          }
+        ]
+      }
+    });
+    expect(createFirstSettlementResponse.statusCode).toBe(201);
+
+    const closeNotSettledResponse = await app.inject({
+      method: "POST",
+      url: `/api/v1/match-stakes/debt-periods/${currentPeriod.id}/close`,
+      payload: {}
+    });
+    expect(closeNotSettledResponse.statusCode).toBe(422);
+
+    const createSecondSettlementResponse = await app.inject({
+      method: "POST",
+      url: `/api/v1/match-stakes/debt-periods/${currentPeriod.id}/settlements`,
+      payload: {
+        lines: [
+          {
+            payerPlayerId: "10000000-0000-4000-8000-000000000003",
+            receiverPlayerId: "10000000-0000-4000-8000-000000000001",
+            amountVnd: 50000
+          }
+        ]
+      }
+    });
+    expect(createSecondSettlementResponse.statusCode).toBe(201);
+
+    const closeResponse = await app.inject({
+      method: "POST",
+      url: `/api/v1/match-stakes/debt-periods/${currentPeriod.id}/close`,
+      payload: { note: "done" }
+    });
+    expect(closeResponse.statusCode).toBe(200);
+    expect(closeResponse.json().data.status).toBe("CLOSED");
+
+    const createNewPeriodResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/match-stakes/debt-periods",
+      payload: { title: "New cycle" }
+    });
+    expect(createNewPeriodResponse.statusCode).toBe(201);
+
+    const moduleMatchesResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/match-stakes/matches?page=1&pageSize=20&periodId=${currentPeriod.id}`
+    });
+    expect(moduleMatchesResponse.statusCode).toBe(200);
+    expect(moduleMatchesResponse.json().data[0].debtPeriodId).toBe(currentPeriod.id);
+    expect(moduleMatchesResponse.json().data[0].debtPeriodNo).toBe(1);
+
+    const matchDetailResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/matches/${createdMatch.id}`
+    });
+    expect(matchDetailResponse.statusCode).toBe(200);
+    expect(matchDetailResponse.json().data.debtPeriodId).toBe(currentPeriod.id);
+  });
 });

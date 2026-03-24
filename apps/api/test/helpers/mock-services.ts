@@ -41,6 +41,8 @@ interface MatchRecord {
   overrideReason: string | null;
   manualAdjusted: boolean;
   status: "POSTED" | "VOIDED";
+  debtPeriodId: string | null;
+  debtPeriodNo: number | null;
 }
 
 interface ManualGroupFundTransaction {
@@ -53,6 +55,33 @@ interface ManualGroupFundTransaction {
   playerName: string | null;
   amountVnd: number;
   reason: string;
+}
+
+interface MatchStakesDebtPeriodRecord {
+  id: string;
+  periodNo: number;
+  title: string | null;
+  note: string | null;
+  status: "OPEN" | "CLOSED";
+  openedAt: string;
+  closedAt: string | null;
+}
+
+interface MatchStakesDebtSettlementRecord {
+  id: string;
+  periodId: string;
+  postedAt: string;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lines: Array<{
+    id: string;
+    payerPlayerId: string;
+    receiverPlayerId: string;
+    amountVnd: number;
+    note: string | null;
+    createdAt: string;
+  }>;
 }
 
 function uid(prefix: string): string {
@@ -75,6 +104,8 @@ export function createMockServices(): AppServices {
   const presets = new Map<ModuleType, any>();
   const matches = new Map<string, MatchRecord>();
   const manualGroupFundTransactions: ManualGroupFundTransaction[] = [];
+  const debtPeriods: MatchStakesDebtPeriodRecord[] = [];
+  const debtSettlementsByPeriod = new Map<string, MatchStakesDebtSettlementRecord[]>();
   const builderValidationService = new MatchStakesBuilderValidationService();
   const builderCompileService = new MatchStakesBuilderCompileService();
 
@@ -202,6 +233,125 @@ export function createMockServices(): AppServices {
     ...item,
     description: item.versions[0]?.description ?? null
   });
+
+  const getCurrentOpenDebtPeriod = (): MatchStakesDebtPeriodRecord | null =>
+    debtPeriods.find((period) => period.status === "OPEN") ?? null;
+
+  const createDebtPeriod = (input: { title?: string | null; note?: string | null }): MatchStakesDebtPeriodRecord => {
+    const existing = getCurrentOpenDebtPeriod();
+    if (existing) {
+      throw new AppError(409, "DEBT_PERIOD_OPEN_ALREADY_EXISTS", "An open debt period already exists for this group");
+    }
+
+    const maxPeriodNo = debtPeriods.reduce((max, period) => Math.max(max, period.periodNo), 0);
+    const created: MatchStakesDebtPeriodRecord = {
+      id: uid("debt-period"),
+      periodNo: maxPeriodNo + 1,
+      title: input.title ?? null,
+      note: input.note ?? null,
+      status: "OPEN",
+      openedAt: new Date().toISOString(),
+      closedAt: null
+    };
+    debtPeriods.unshift(created);
+    return created;
+  };
+
+  const getOrCreateOpenDebtPeriod = (): MatchStakesDebtPeriodRecord => {
+    return getCurrentOpenDebtPeriod() ?? createDebtPeriod({});
+  };
+
+  const buildDebtPeriodSummary = (periodId: string) => {
+    const scopedMatches = Array.from(matches.values()).filter(
+      (match) => match.module === "MATCH_STAKES" && match.debtPeriodId === periodId && match.status !== "VOIDED"
+    );
+    const settlements = debtSettlementsByPeriod.get(periodId) ?? [];
+
+    const playerSummaryMap = new Map<
+      string,
+      {
+        playerId: string;
+        playerName: string;
+        totalMatches: number;
+        accruedNetVnd: number;
+        settledPaidVnd: number;
+        settledReceivedVnd: number;
+      }
+    >();
+
+    const ensurePlayer = (playerId: string) => {
+      const existing = playerSummaryMap.get(playerId);
+      if (existing) {
+        return existing;
+      }
+      const created = {
+        playerId,
+        playerName: players.get(playerId)?.displayName ?? playerId,
+        totalMatches: 0,
+        accruedNetVnd: 0,
+        settledPaidVnd: 0,
+        settledReceivedVnd: 0
+      };
+      playerSummaryMap.set(playerId, created);
+      return created;
+    };
+
+    for (const match of scopedMatches) {
+      const ranked = [...match.participants].sort((left, right) => left.tftPlacement - right.tftPlacement);
+      const winner = ranked[0];
+      const losers = ranked.slice(1);
+      const winnerGain = losers.length > 0 ? 100000 : 0;
+      const loserShare = losers.length > 0 ? Math.floor(winnerGain / losers.length) : 0;
+      let remaining = winnerGain;
+
+      if (winner) {
+        const winnerSummary = ensurePlayer(winner.playerId);
+        winnerSummary.accruedNetVnd += winnerGain;
+      }
+
+      for (const [index, loser] of losers.entries()) {
+        const amount = index === losers.length - 1 ? remaining : loserShare;
+        remaining -= amount;
+        const loserSummary = ensurePlayer(loser.playerId);
+        loserSummary.accruedNetVnd -= amount;
+      }
+
+      for (const participant of ranked) {
+        const player = ensurePlayer(participant.playerId);
+        player.totalMatches += 1;
+      }
+    }
+
+    for (const settlement of settlements) {
+      for (const line of settlement.lines) {
+        const payer = ensurePlayer(line.payerPlayerId);
+        const receiver = ensurePlayer(line.receiverPlayerId);
+        payer.settledPaidVnd += line.amountVnd;
+        receiver.settledReceivedVnd += line.amountVnd;
+      }
+    }
+
+    const playersSummary = Array.from(playerSummaryMap.values()).map((player) => ({
+      ...player,
+      outstandingNetVnd: player.accruedNetVnd - player.settledReceivedVnd + player.settledPaidVnd
+    }));
+
+    const summary = {
+      totalMatches: scopedMatches.length,
+      totalPlayers: playersSummary.length,
+      totalOutstandingReceiveVnd: playersSummary
+        .filter((player) => player.outstandingNetVnd > 0)
+        .reduce((sum, player) => sum + player.outstandingNetVnd, 0),
+      totalOutstandingPayVnd: playersSummary
+        .filter((player) => player.outstandingNetVnd < 0)
+        .reduce((sum, player) => sum + Math.abs(player.outstandingNetVnd), 0)
+    };
+
+    return {
+      players: playersSummary,
+      summary
+    };
+  };
 
   const toRuleSetDetailResponse = (item: RuleSet) => {
     const normalized = toRuleSetResponse(item);
@@ -648,6 +798,7 @@ export function createMockServices(): AppServices {
         const confirmationMode = input.confirmation?.mode ?? "ENGINE";
         const overrideReason = input.confirmation?.overrideReason ?? null;
         const manualAdjusted = confirmationMode === "MANUAL_ADJUSTED";
+        const debtPeriod = input.module === "MATCH_STAKES" ? getOrCreateOpenDebtPeriod() : null;
 
         const record: MatchRecord = {
           id,
@@ -660,7 +811,9 @@ export function createMockServices(): AppServices {
           confirmationMode,
           overrideReason,
           manualAdjusted,
-          status: "POSTED"
+          status: "POSTED",
+          debtPeriodId: debtPeriod?.id ?? null,
+          debtPeriodNo: debtPeriod?.periodNo ?? null
         };
 
         matches.set(id, record);
@@ -679,6 +832,8 @@ export function createMockServices(): AppServices {
           playedAt,
           participantCount: input.participants.length,
           status: "POSTED",
+          debtPeriodId: record.debtPeriodId,
+          debtPeriodNo: record.debtPeriodNo,
           confirmationMode,
           overrideReason,
           manualAdjusted,
@@ -703,13 +858,16 @@ export function createMockServices(): AppServices {
           }
         };
       },
-      listMatches: async ({ module, status, page, pageSize }) => {
+      listMatches: async ({ module, status, periodId, page, pageSize }) => {
         let items = Array.from(matches.values());
         if (module) {
           items = items.filter((item) => item.module === module);
         }
         if (status) {
           items = items.filter((item) => item.status === status);
+        }
+        if (periodId) {
+          items = items.filter((item) => item.debtPeriodId === periodId);
         }
         const start = (page - 1) * pageSize;
         return {
@@ -749,6 +907,8 @@ export function createMockServices(): AppServices {
           participantCount: item.participantCount,
           status: item.status,
           note: null,
+          debtPeriodId: item.debtPeriodId,
+          debtPeriodNo: item.debtPeriodNo,
           confirmationMode: item.confirmationMode,
           overrideReason: item.overrideReason,
           manualAdjusted: item.manualAdjusted,
@@ -820,6 +980,170 @@ export function createMockServices(): AppServices {
         totalMatches: Array.from(matches.values()).filter((item) => item.module === "MATCH_STAKES").length,
         range: { from: null, to: null }
       }),
+      getCurrentDebtPeriod: async () => {
+        const period = getCurrentOpenDebtPeriod();
+        if (!period) {
+          throw new AppError(404, "DEBT_PERIOD_NOT_FOUND", "No open debt period found");
+        }
+        const computed = buildDebtPeriodSummary(period.id);
+        return {
+          period,
+          summary: computed.summary,
+          players: computed.players
+        };
+      },
+      listDebtPeriods: async ({ page, pageSize }) => {
+        const sorted = [...debtPeriods].sort((left, right) => new Date(right.openedAt).getTime() - new Date(left.openedAt).getTime());
+        const start = (page - 1) * pageSize;
+        const scoped = sorted.slice(start, start + pageSize);
+        return {
+          items: scoped.map((period) => {
+            const computed = buildDebtPeriodSummary(period.id);
+            return {
+              ...period,
+              ...computed.summary
+            };
+          }),
+          total: sorted.length
+        };
+      },
+      getDebtPeriodDetail: async (periodId) => {
+        const period = debtPeriods.find((item) => item.id === periodId);
+        if (!period) {
+          throw new AppError(404, "DEBT_PERIOD_NOT_FOUND", "Debt period not found");
+        }
+        const computed = buildDebtPeriodSummary(period.id);
+        const settlements = (debtSettlementsByPeriod.get(period.id) ?? []).map((settlement) => ({
+          ...settlement,
+          lines: settlement.lines.map((line) => ({
+            ...line,
+            payerPlayerName: players.get(line.payerPlayerId)?.displayName ?? line.payerPlayerId,
+            receiverPlayerName: players.get(line.receiverPlayerId)?.displayName ?? line.receiverPlayerId
+          }))
+        }));
+        const recentMatches = Array.from(matches.values())
+          .filter((match) => match.module === "MATCH_STAKES" && match.debtPeriodId === period.id)
+          .slice(0, 20)
+          .map((match) => ({
+            id: match.id,
+            playedAt: match.playedAt,
+            participantCount: match.participantCount,
+            status: match.status,
+            debtPeriodId: match.debtPeriodId,
+            debtPeriodNo: match.debtPeriodNo
+          }));
+
+        return {
+          period,
+          summary: computed.summary,
+          players: computed.players,
+          settlements,
+          recentMatches
+        };
+      },
+      createDebtPeriod: async (input) => {
+        return createDebtPeriod(input ?? {});
+      },
+      createDebtSettlement: async (periodId, input) => {
+        const period = debtPeriods.find((item) => item.id === periodId);
+        if (!period) {
+          throw new AppError(404, "DEBT_PERIOD_NOT_FOUND", "Debt period not found");
+        }
+        if (period.status !== "OPEN") {
+          throw new AppError(422, "DEBT_PERIOD_NOT_OPEN", "Debt period is not open");
+        }
+
+        if (!input.lines || input.lines.length === 0) {
+          throw new AppError(400, "DEBT_SETTLEMENT_INVALID", "Settlement lines must not be empty");
+        }
+
+        const currentSummary = buildDebtPeriodSummary(period.id);
+        const outstandingByPlayer = new Map(currentSummary.players.map((item) => [item.playerId, item.outstandingNetVnd]));
+        const deltaByPlayer = new Map<string, number>();
+        for (const line of input.lines) {
+          if (line.payerPlayerId === line.receiverPlayerId) {
+            throw new AppError(400, "DEBT_SETTLEMENT_INVALID", "payerPlayerId and receiverPlayerId must be different");
+          }
+          if (!players.get(line.payerPlayerId) || !players.get(line.receiverPlayerId)) {
+            throw new AppError(422, "DEBT_SETTLEMENT_INVALID", "Settlement players must exist in current group");
+          }
+          deltaByPlayer.set(line.payerPlayerId, (deltaByPlayer.get(line.payerPlayerId) ?? 0) + line.amountVnd);
+          deltaByPlayer.set(line.receiverPlayerId, (deltaByPlayer.get(line.receiverPlayerId) ?? 0) - line.amountVnd);
+        }
+
+        for (const [playerId, delta] of deltaByPlayer.entries()) {
+          const before = outstandingByPlayer.get(playerId) ?? 0;
+          const after = before + delta;
+          if (before === 0 && after !== 0) {
+            throw new AppError(422, "DEBT_SETTLEMENT_OVERPAY", "Settlement would overshoot outstanding");
+          }
+          if (before !== 0) {
+            if (after !== 0 && Math.sign(before) !== Math.sign(after)) {
+              throw new AppError(422, "DEBT_SETTLEMENT_OVERPAY", "Settlement would overshoot outstanding");
+            }
+            if (Math.abs(after) > Math.abs(before)) {
+              throw new AppError(422, "DEBT_SETTLEMENT_OVERPAY", "Settlement would overshoot outstanding");
+            }
+          }
+        }
+
+        const createdAt = new Date().toISOString();
+        const settlement: MatchStakesDebtSettlementRecord = {
+          id: uid("debt-settlement"),
+          periodId: period.id,
+          postedAt: input.postedAt ?? createdAt,
+          note: input.note ?? null,
+          createdAt,
+          updatedAt: createdAt,
+          lines: input.lines.map((line) => ({
+            id: uid("debt-settlement-line"),
+            payerPlayerId: line.payerPlayerId,
+            receiverPlayerId: line.receiverPlayerId,
+            amountVnd: line.amountVnd,
+            note: line.note ?? null,
+            createdAt
+          }))
+        };
+        const existing = debtSettlementsByPeriod.get(period.id) ?? [];
+        debtSettlementsByPeriod.set(period.id, [settlement, ...existing]);
+
+        const updated = buildDebtPeriodSummary(period.id);
+        return {
+          settlement: {
+            ...settlement,
+            lines: settlement.lines.map((line) => ({
+              ...line,
+              payerPlayerName: players.get(line.payerPlayerId)?.displayName ?? line.payerPlayerId,
+              receiverPlayerName: players.get(line.receiverPlayerId)?.displayName ?? line.receiverPlayerId
+            }))
+          },
+          summary: updated.summary,
+          players: updated.players
+        };
+      },
+      closeDebtPeriod: async (periodId, input) => {
+        const period = debtPeriods.find((item) => item.id === periodId);
+        if (!period) {
+          throw new AppError(404, "DEBT_PERIOD_NOT_FOUND", "Debt period not found");
+        }
+        if (period.status !== "OPEN") {
+          throw new AppError(422, "DEBT_PERIOD_NOT_OPEN", "Debt period is not open");
+        }
+        const computed = buildDebtPeriodSummary(period.id);
+        if (computed.players.some((player) => player.outstandingNetVnd !== 0)) {
+          throw new AppError(422, "DEBT_PERIOD_OUTSTANDING_NOT_ZERO", "Debt period cannot be closed while outstanding remains");
+        }
+        period.status = "CLOSED";
+        period.closedAt = new Date().toISOString();
+        if (input?.note) {
+          period.note = input.note;
+        }
+        return {
+          id: period.id,
+          status: "CLOSED",
+          closedAt: period.closedAt
+        };
+      },
       getLedger: async ({ page, pageSize }) => ({
         items: [],
         total: 0,

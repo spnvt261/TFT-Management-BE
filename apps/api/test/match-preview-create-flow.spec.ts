@@ -90,6 +90,20 @@ function createFixture() {
     audits: {
       insert: vi.fn().mockResolvedValue(undefined)
     },
+    matchStakesDebt: {
+      getOrCreateOpenPeriod: vi.fn().mockResolvedValue({
+        id: "debt-period-1",
+        groupId: "group-1",
+        periodNo: 1,
+        title: null,
+        note: null,
+        status: "OPEN",
+        openedAt: "2025-01-01T00:00:00.000Z",
+        closedAt: null,
+        createdAt: "2025-01-01T00:00:00.000Z",
+        updatedAt: "2025-01-01T00:00:00.000Z"
+      })
+    },
     accounts: {
       getOrCreatePlayerAccount: vi.fn().mockImplementation(async (_groupId: string, playerId: string) => ({
         accountId: `acc-${playerId.slice(-4)}`,
@@ -214,8 +228,36 @@ describe("match preview/create two-step flow", () => {
     });
 
     expect(result.id).toBe("match-1");
+    expect(txRepositories.matchStakesDebt.getOrCreateOpenPeriod).toHaveBeenCalledWith("group-1");
     expect(txRepositories.matches.createMatch).toHaveBeenCalledTimes(1);
+    expect(txRepositories.matches.createMatch.mock.calls[0]?.[0]?.debtPeriodId).toBe("debt-period-1");
     expect(txRepositories.settlements.createSettlement.mock.calls[0]?.[0]?.resultSnapshot?.confirmationMode).toBe("ENGINE");
+  });
+
+  it("create GROUP_FUND does not attach to match-stakes debt period", async () => {
+    const { service, repositories, txRepositories } = createFixture();
+    repositories.rules.getRuleSetById.mockResolvedValueOnce({
+      id: "20000000-0000-4000-8000-000000000002",
+      module: "GROUP_FUND",
+      code: "GF_DEFAULT",
+      name: "Group Fund Default",
+      description: null,
+      status: "ACTIVE",
+      isDefault: true,
+      createdAt: "2025-01-01T00:00:00.000Z",
+      updatedAt: "2025-01-01T00:00:00.000Z"
+    });
+    vi.spyOn(service, "getMatchDetail").mockResolvedValue({ id: "match-1", confirmationMode: "ENGINE" } as any);
+
+    await service.createMatch({
+      module: "GROUP_FUND",
+      ruleSetId: "20000000-0000-4000-8000-000000000002",
+      ruleSetVersionId: "30000000-0000-4000-8000-000000000001",
+      participants
+    });
+
+    expect(txRepositories.matchStakesDebt.getOrCreateOpenPeriod).not.toHaveBeenCalled();
+    expect(txRepositories.matches.createMatch.mock.calls[0]?.[0]?.debtPeriodId).toBeNull();
   });
 
   it("create success in MANUAL_ADJUSTED mode", async () => {

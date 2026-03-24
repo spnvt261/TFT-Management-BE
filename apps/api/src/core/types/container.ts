@@ -31,7 +31,7 @@ export async function buildServices(pool: Pool): Promise<AppServices> {
     rules: new RuleService(pool, repositories, groupId),
     presets: new PresetService(repositories, groupId),
     matches: new MatchService(pool, repositories, groupId),
-    matchStakes: new MatchStakesService(repositories, groupId),
+    matchStakes: new MatchStakesService(pool, repositories, groupId),
     groupFund: new GroupFundService(pool, repositories, groupId)
   };
 }

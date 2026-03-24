@@ -8,6 +8,7 @@ import { LedgerRepository } from "./ledger-repository.js";
 import { PresetRepository } from "./preset-repository.js";
 import { AuditRepository } from "./audit-repository.js";
 import { AccountRepository } from "./account-repository.js";
+import { MatchStakesDebtRepository } from "./match-stakes-debt-repository.js";
 
 export function createRepositories(db: Queryable) {
   return {
@@ -19,7 +20,8 @@ export function createRepositories(db: Queryable) {
     ledgers: new LedgerRepository(db),
     presets: new PresetRepository(db),
     audits: new AuditRepository(db),
-    accounts: new AccountRepository(db)
+    accounts: new AccountRepository(db),
+    matchStakesDebt: new MatchStakesDebtRepository(db)
   };
 }
 

@@ -14,6 +14,7 @@ export interface MatchInsertInput {
   module: ModuleType;
   ruleSetId: string;
   ruleSetVersionId: string;
+  debtPeriodId: string | null;
   playedAt: string;
   participantCount: number;
   status: MatchStatus;
@@ -28,6 +29,8 @@ export interface MatchDetailRow {
   rule_set_id: string;
   rule_set_version_id: string;
   rule_set_version_no?: number;
+  debt_period_id: string | null;
+  debt_period_no?: number | null;
   played_at: string;
   participant_count: number;
   status: MatchStatus;
@@ -45,6 +48,7 @@ export interface MatchListFilters {
   status?: MatchStatus;
   playerId?: string;
   ruleSetId?: string;
+  periodId?: string;
   from?: string;
   to?: string;
   page: number;
@@ -58,10 +62,10 @@ export class MatchRepository {
     const result = await this.db.query<{ id: string }>(
       `
       INSERT INTO matches(
-        group_id, module, rule_set_id, rule_set_version_id, played_at, participant_count,
+        group_id, module, rule_set_id, rule_set_version_id, debt_period_id, played_at, participant_count,
         status, input_snapshot_json, calculation_snapshot_json
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING id
       `,
       [
@@ -69,6 +73,7 @@ export class MatchRepository {
         input.module,
         input.ruleSetId,
         input.ruleSetVersionId,
+        input.debtPeriodId,
         input.playedAt,
         input.participantCount,
         input.status,
@@ -115,10 +120,12 @@ export class MatchRepository {
   public async findById(groupId: string, matchId: string): Promise<MatchDetailRow | null> {
     const result = await this.db.query<MatchDetailRow>(
       `
-      SELECT id, group_id, module, rule_set_id, rule_set_version_id, played_at, participant_count, status,
-             void_reason, voided_at, input_snapshot_json, calculation_snapshot_json, created_at, updated_at
-      FROM matches
-      WHERE id = $1 AND group_id = $2
+      SELECT m.id, m.group_id, m.module, m.rule_set_id, m.rule_set_version_id, m.debt_period_id, dp.period_no AS debt_period_no,
+             m.played_at, m.participant_count, m.status,
+             m.void_reason, m.voided_at, m.input_snapshot_json, m.calculation_snapshot_json, m.created_at, m.updated_at
+      FROM matches m
+      LEFT JOIN match_stakes_debt_periods dp ON dp.id = m.debt_period_id
+      WHERE m.id = $1 AND m.group_id = $2
       LIMIT 1
       `,
       [matchId, groupId]
@@ -151,6 +158,11 @@ export class MatchRepository {
       conditions.push(`m.rule_set_id = $${params.length}`);
     }
 
+    if (filters.periodId) {
+      params.push(filters.periodId);
+      conditions.push(`m.debt_period_id = $${params.length}`);
+    }
+
     if (filters.from) {
       params.push(filters.from);
       conditions.push(`m.played_at >= $${params.length}`);
@@ -173,9 +185,11 @@ export class MatchRepository {
     const result = await this.db.query<MatchDetailRow>(
       `
       SELECT m.id, m.group_id, m.module, m.rule_set_id, m.rule_set_version_id, rsv.version_no AS rule_set_version_no,
+             m.debt_period_id, dp.period_no AS debt_period_no,
              m.played_at, m.participant_count, m.status, m.void_reason, m.voided_at, m.created_at, m.updated_at
       FROM matches m
       INNER JOIN rule_set_versions rsv ON rsv.id = m.rule_set_version_id
+      LEFT JOIN match_stakes_debt_periods dp ON dp.id = m.debt_period_id
       WHERE ${whereSql}
       ORDER BY m.played_at DESC, m.created_at DESC
       LIMIT $${params.length - 1} OFFSET $${params.length}

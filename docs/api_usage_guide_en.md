@@ -78,6 +78,7 @@ interface PaginationQuery {
 ```ts
 type ModuleType = "MATCH_STAKES" | "GROUP_FUND";
 type MatchStatus = "DRAFT" | "CALCULATED" | "POSTED" | "VOIDED";
+type DebtPeriodStatus = "OPEN" | "CLOSED";
 type RuleStatus = "ACTIVE" | "INACTIVE";
 type RuleKind =
   | "BASE_RELATIVE_RANK"
@@ -133,6 +134,12 @@ type MatchStakesPenaltyDestinationSelectorType =
 | GET | `/api/v1/recent-match-presets/:module` | Get recent preset by module |
 | PUT | `/api/v1/recent-match-presets/:module` | Upsert recent preset by module |
 | GET | `/api/v1/match-stakes/summary` | Match Stakes summary |
+| GET | `/api/v1/match-stakes/debt-periods/current` | Current open Match Stakes debt period with cumulative summary |
+| GET | `/api/v1/match-stakes/debt-periods` | List Match Stakes debt periods |
+| GET | `/api/v1/match-stakes/debt-periods/:periodId` | Match Stakes debt period detail |
+| POST | `/api/v1/match-stakes/debt-periods` | Create a new open Match Stakes debt period |
+| POST | `/api/v1/match-stakes/debt-periods/:periodId/settlements` | Record real-world debt settlement lines |
+| POST | `/api/v1/match-stakes/debt-periods/:periodId/close` | Close a Match Stakes debt period |
 | GET | `/api/v1/match-stakes/ledger` | Match Stakes ledger history |
 | GET | `/api/v1/match-stakes/matches` | Match Stakes match history |
 | POST | `/api/v1/group-fund/transactions` | Create manual Group Fund transaction |
@@ -881,6 +888,8 @@ ApiSuccessResponse<{
   playedAt: string;
   participantCount: number;
   status: string;
+  debtPeriodId?: string | null; // MATCH_STAKES only
+  debtPeriodNo?: number | null; // MATCH_STAKES only
   note?: string | null;
   confirmationMode: "ENGINE" | "MANUAL_ADJUSTED";
   overrideReason: string | null;
@@ -917,9 +926,10 @@ Processing flow:
    - `matches.input_snapshot_json`: request payload.
    - `matches.calculation_snapshot_json`: original engine result.
    - `match_settlements.result_snapshot_json`: final confirmed snapshot + confirmation metadata.
-7. Persist final settlement lines and post ledger entries from final lines.
-8. Upsert recent preset and write audit log.
-9. Return match detail.
+7. If module is `MATCH_STAKES`, resolve current open debt period (auto-create if not found) and persist `matches.debt_period_id`.
+8. Persist final settlement lines and post ledger entries from final lines.
+9. Upsert recent preset and write audit log.
+10. Return match detail.
 
 Main errors:
 
@@ -965,6 +975,8 @@ interface MatchListItemDto {
   ruleSetName: string;
   ruleSetVersionId: string;
   ruleSetVersionNo: number;
+  debtPeriodId: string | null; // populated for MATCH_STAKES
+  debtPeriodNo: number | null; // populated for MATCH_STAKES
   notePreview: string | null; // first 120 chars
   status: string;
   confirmationMode: "ENGINE" | "MANUAL_ADJUSTED";
@@ -1009,6 +1021,8 @@ ApiSuccessResponse<{
   participantCount: number;
   status: string;
   note: string | null;
+  debtPeriodId: string | null; // populated for MATCH_STAKES
+  debtPeriodNo: number | null; // populated for MATCH_STAKES
   confirmationMode: "ENGINE" | "MANUAL_ADJUSTED";
   overrideReason: string | null;
   manualAdjusted: boolean;
@@ -1143,9 +1157,253 @@ Processing flow:
 
 ## 5.6 Match Stakes APIs
 
+### Debt-period business model
+
+`MATCH_STAKES` now uses a debt-period-first model:
+
+1. One group can have at most one open debt period.
+2. Every `MATCH_STAKES` match belongs to exactly one debt period.
+3. Match outcomes accrue per-player debt/receivable in that period.
+4. Real-world payments are recorded later as debt settlement lines.
+5. Period can be closed only when all player outstanding balances are zero.
+
+Per-player cumulative formula:
+
+```ts
+outstandingNetVnd = accruedNetVnd - settledReceivedVnd + settledPaidVnd;
+```
+
+Meaning:
+
+- `outstandingNetVnd > 0`: player should still receive money.
+- `outstandingNetVnd < 0`: player still owes money.
+
+### GET `/api/v1/match-stakes/debt-periods/current`
+
+Business purpose: return the current open debt period with cumulative outstanding summary.
+
+Request DTO: none.
+
+Response DTO:
+
+```ts
+interface DebtPeriodDto {
+  id: string;
+  periodNo: number;
+  title: string | null;
+  note: string | null;
+  status: "OPEN" | "CLOSED";
+  openedAt: string;
+  closedAt: string | null;
+}
+
+interface DebtPeriodPlayerSummaryDto {
+  playerId: string;
+  playerName: string;
+  totalMatches: number;
+  accruedNetVnd: number;
+  settledPaidVnd: number;
+  settledReceivedVnd: number;
+  outstandingNetVnd: number;
+}
+
+interface DebtPeriodSummaryDto {
+  totalMatches: number;
+  totalPlayers: number;
+  totalOutstandingReceiveVnd: number;
+  totalOutstandingPayVnd: number;
+}
+
+ApiSuccessResponse<{
+  period: DebtPeriodDto;
+  summary: DebtPeriodSummaryDto;
+  players: DebtPeriodPlayerSummaryDto[];
+}>;
+```
+
+Main errors:
+
+- `404 DEBT_PERIOD_NOT_FOUND` when no open period exists.
+
+### GET `/api/v1/match-stakes/debt-periods`
+
+Business purpose: list debt periods (newest first), paginated.
+
+Request DTO:
+
+```ts
+interface ListDebtPeriodsQuery {
+  page?: number; // default 1
+  pageSize?: number; // default 20, max 100
+}
+```
+
+Response DTO:
+
+```ts
+ApiSuccessResponse<Array<
+  DebtPeriodDto & {
+    totalMatches: number;
+    totalPlayers: number;
+    totalOutstandingReceiveVnd: number;
+    totalOutstandingPayVnd: number;
+  }
+>>;
+```
+
+### GET `/api/v1/match-stakes/debt-periods/:periodId`
+
+Business purpose: debt period detail for settlement/closing screens.
+
+Request DTO:
+
+```ts
+interface DebtPeriodIdParam {
+  periodId: string; // uuid
+}
+```
+
+Response DTO:
+
+```ts
+ApiSuccessResponse<{
+  period: DebtPeriodDto;
+  summary: DebtPeriodSummaryDto;
+  players: DebtPeriodPlayerSummaryDto[];
+  settlements: Array<{
+    id: string;
+    postedAt: string;
+    note: string | null;
+    createdAt: string;
+    updatedAt: string;
+    lines: Array<{
+      id: string;
+      payerPlayerId: string;
+      payerPlayerName: string;
+      receiverPlayerId: string;
+      receiverPlayerName: string;
+      amountVnd: number;
+      note: string | null;
+      createdAt: string;
+    }>;
+  }>;
+  recentMatches: Array<{
+    id: string;
+    playedAt: string;
+    participantCount: number;
+    status: string;
+    debtPeriodId: string | null;
+    debtPeriodNo: number | null;
+  }>;
+}>;
+```
+
+Main errors:
+
+- `404 DEBT_PERIOD_NOT_FOUND`.
+
+### POST `/api/v1/match-stakes/debt-periods`
+
+Business purpose: manually create a new open debt period.
+
+Request DTO:
+
+```ts
+interface CreateDebtPeriodRequest {
+  title?: string | null; // max 150
+  note?: string | null;
+}
+```
+
+Response DTO: `ApiSuccessResponse<DebtPeriodDto>`.
+
+Main errors:
+
+- `409 DEBT_PERIOD_OPEN_ALREADY_EXISTS`.
+
+### POST `/api/v1/match-stakes/debt-periods/:periodId/settlements`
+
+Business purpose: record actual real-world payments inside an open debt period.
+
+Request DTO:
+
+```ts
+interface CreateDebtSettlementRequest {
+  postedAt?: string; // datetime
+  note?: string | null;
+  lines: Array<{
+    payerPlayerId: string;
+    receiverPlayerId: string;
+    amountVnd: number; // > 0 integer
+    note?: string | null;
+  }>; // min length 1
+}
+```
+
+Response DTO:
+
+```ts
+ApiSuccessResponse<{
+  settlement: {
+    id: string;
+    postedAt: string;
+    note: string | null;
+    createdAt: string;
+    updatedAt: string;
+    lines: Array<{
+      id: string;
+      payerPlayerId: string;
+      payerPlayerName: string;
+      receiverPlayerId: string;
+      receiverPlayerName: string;
+      amountVnd: number;
+      note: string | null;
+      createdAt: string;
+    }>;
+  };
+  summary: DebtPeriodSummaryDto;
+  players: DebtPeriodPlayerSummaryDto[];
+}>;
+```
+
+Main errors:
+
+- `400 DEBT_SETTLEMENT_INVALID`
+- `404 DEBT_PERIOD_NOT_FOUND`
+- `422 DEBT_PERIOD_NOT_OPEN`
+- `422 DEBT_SETTLEMENT_OVERPAY`
+
+### POST `/api/v1/match-stakes/debt-periods/:periodId/close`
+
+Business purpose: close an open debt period after all outstanding balances are fully settled.
+
+Request DTO:
+
+```ts
+interface CloseDebtPeriodRequest {
+  note?: string | null;
+}
+```
+
+Response DTO:
+
+```ts
+ApiSuccessResponse<{
+  id: string;
+  status: "CLOSED";
+  closedAt: string | null;
+}>;
+```
+
+Main errors:
+
+- `404 DEBT_PERIOD_NOT_FOUND`
+- `422 DEBT_PERIOD_NOT_OPEN`
+- `422 DEBT_PERIOD_OUTSTANDING_NOT_ZERO`
+
 ### GET `/api/v1/match-stakes/summary`
 
-Business purpose: module-level standings and aggregate metrics.
+Business purpose: legacy module-level standings and aggregate metrics.
 
 Request DTO:
 
@@ -1175,15 +1433,9 @@ ApiSuccessResponse<{
 }>;
 ```
 
-Processing flow:
-
-1. Aggregate player net/stats from ledger + match tables.
-2. Count total matches for module.
-3. Return summary and range echo.
-
 ### GET `/api/v1/match-stakes/ledger`
 
-Business purpose: list ledger movements for Match Stakes.
+Business purpose: legacy/audit-oriented list of ledger movements for Match Stakes.
 
 Request DTO:
 
@@ -1215,13 +1467,6 @@ ApiSuccessResponse<Array<{
 }>>;
 ```
 
-Processing flow:
-
-1. Query ledger entries by group/module with optional player/date filters.
-2. Join account/player/rule metadata.
-3. Map DB snake_case to API camelCase.
-4. Return items + pagination meta.
-
 ### GET `/api/v1/match-stakes/matches`
 
 Business purpose: match history restricted to module `MATCH_STAKES`.
@@ -1231,16 +1476,11 @@ Request DTO:
 ```ts
 interface ModuleMatchesQuery extends ModuleLedgerQuery {
   ruleSetId?: string;
+  periodId?: string; // filter by debt period
 }
 ```
 
-Response DTO: `ApiSuccessResponse<MatchListItemDto[]>`.
-
-Processing flow:
-
-1. Force `module = MATCH_STAKES`.
-2. Delegate to common match list service.
-3. Return paginated list.
+Response DTO: `ApiSuccessResponse<MatchListItemDto[]>` (includes `debtPeriodId`, `debtPeriodNo`).
 
 ## 5.7 Group Fund APIs
 
@@ -1522,5 +1762,11 @@ Processing flow:
 | `MATCH_NOT_FOUND` | Match not found |
 | `MATCH_VOID_REASON_INVALID` | Void reason shorter than 3 chars |
 | `MATCH_ALREADY_VOIDED` | Match already voided |
+| `DEBT_PERIOD_NOT_FOUND` | Debt period not found (or no open debt period for current endpoint) |
+| `DEBT_PERIOD_OPEN_ALREADY_EXISTS` | Cannot create a new open debt period while another open period exists |
+| `DEBT_PERIOD_NOT_OPEN` | Operation requires an open debt period but target period is closed |
+| `DEBT_PERIOD_OUTSTANDING_NOT_ZERO` | Period close rejected because at least one player has non-zero outstanding |
+| `DEBT_SETTLEMENT_INVALID` | Settlement payload invalid (empty lines, invalid players, payer=receiver, non-positive amount) |
+| `DEBT_SETTLEMENT_OVERPAY` | Settlement would overshoot outstanding and cross in wrong direction |
 | `RULE_SELECTOR_INVALID` | Selector type/json invalid |
 | `RULE_SELECTOR_NOT_FOUND` | Selector target participant not found |

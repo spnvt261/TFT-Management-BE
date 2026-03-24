@@ -4,6 +4,7 @@ import { uuidSchema } from "../../core/validation/uuid.js";
 import { ok } from "../../core/types/api.js";
 import type { AppServices } from "../../core/types/container.js";
 import { errorResponseSchemas, paginationMetaSchema, successResponseSchema, toSwaggerSchema } from "../../core/docs/swagger.js";
+import { debtPeriodStatusSchema } from "../../domain/models/enums.js";
 
 const querySchema = z.object({
   playerId: uuidSchema.optional(),
@@ -14,6 +15,130 @@ const querySchema = z.object({
 });
 
 const summaryQuerySchema = z.object({ from: z.string().datetime().optional(), to: z.string().datetime().optional() });
+const periodIdParamSchema = z.object({ periodId: uuidSchema });
+
+const createDebtPeriodBodySchema = z.object({
+  title: z.string().max(150).nullable().optional(),
+  note: z.string().max(4000).nullable().optional()
+});
+
+const createSettlementBodySchema = z.object({
+  postedAt: z.string().datetime().optional(),
+  note: z.string().max(4000).nullable().optional(),
+  lines: z
+    .array(
+      z.object({
+        payerPlayerId: uuidSchema,
+        receiverPlayerId: uuidSchema,
+        amountVnd: z.coerce.number().int().positive(),
+        note: z.string().max(1000).nullable().optional()
+      })
+    )
+    .min(1)
+}).superRefine((value, context) => {
+  value.lines.forEach((line, index) => {
+    if (line.payerPlayerId === line.receiverPlayerId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["lines", index, "receiverPlayerId"],
+        message: "payerPlayerId and receiverPlayerId must be different"
+      });
+    }
+  });
+});
+
+const closeDebtPeriodBodySchema = z.object({
+  note: z.string().max(4000).nullable().optional()
+});
+
+const debtPeriodSchema = z.object({
+  id: uuidSchema,
+  periodNo: z.number().int().positive(),
+  title: z.string().nullable(),
+  note: z.string().nullable(),
+  status: debtPeriodStatusSchema,
+  openedAt: z.string(),
+  closedAt: z.string().nullable()
+});
+
+const debtPeriodPlayerSummarySchema = z.object({
+  playerId: uuidSchema,
+  playerName: z.string(),
+  totalMatches: z.number().int().nonnegative(),
+  accruedNetVnd: z.number().int(),
+  settledPaidVnd: z.number().int().nonnegative(),
+  settledReceivedVnd: z.number().int().nonnegative(),
+  outstandingNetVnd: z.number().int()
+});
+
+const debtPeriodSummarySchema = z.object({
+  totalMatches: z.number().int().nonnegative(),
+  totalPlayers: z.number().int().nonnegative(),
+  totalOutstandingReceiveVnd: z.number().int().nonnegative(),
+  totalOutstandingPayVnd: z.number().int().nonnegative()
+});
+
+const debtPeriodCurrentResponseSchema = z.object({
+  period: debtPeriodSchema,
+  summary: debtPeriodSummarySchema,
+  players: z.array(debtPeriodPlayerSummarySchema)
+});
+
+const debtPeriodListItemSchema = debtPeriodSchema.extend({
+  totalMatches: z.number().int().nonnegative(),
+  totalPlayers: z.number().int().nonnegative(),
+  totalOutstandingReceiveVnd: z.number().int().nonnegative(),
+  totalOutstandingPayVnd: z.number().int().nonnegative()
+});
+
+const debtSettlementLineSchema = z.object({
+  id: uuidSchema,
+  payerPlayerId: uuidSchema,
+  payerPlayerName: z.string(),
+  receiverPlayerId: uuidSchema,
+  receiverPlayerName: z.string(),
+  amountVnd: z.number().int().positive(),
+  note: z.string().nullable(),
+  createdAt: z.string()
+});
+
+const debtSettlementSchema = z.object({
+  id: uuidSchema,
+  postedAt: z.string(),
+  note: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  lines: z.array(debtSettlementLineSchema)
+});
+
+const debtPeriodDetailResponseSchema = z.object({
+  period: debtPeriodSchema,
+  summary: debtPeriodSummarySchema,
+  players: z.array(debtPeriodPlayerSummarySchema),
+  settlements: z.array(debtSettlementSchema),
+  recentMatches: z.array(
+    z.object({
+      id: uuidSchema,
+      playedAt: z.string(),
+      participantCount: z.number().int().positive(),
+      status: z.string(),
+      debtPeriodId: uuidSchema.nullable(),
+      debtPeriodNo: z.number().int().positive().nullable()
+    })
+  )
+});
+
+const createSettlementResponseSchema = z.object({
+  settlement: debtSettlementSchema,
+  summary: debtPeriodSummarySchema,
+  players: z.array(debtPeriodPlayerSummarySchema)
+});
+
+const closeDebtPeriodResponseSchema = z.object({
+  id: uuidSchema,
+  status: z.literal("CLOSED"),
+  closedAt: z.string().nullable()
+});
 
 const matchStakesSummarySchema = z.object({
   module: z.literal("MATCH_STAKES"),
@@ -66,6 +191,8 @@ const moduleMatchHistoryItemSchema = z.object({
   ruleSetName: z.string(),
   ruleSetVersionId: uuidSchema,
   ruleSetVersionNo: z.number().int().positive(),
+  debtPeriodId: uuidSchema.nullable(),
+  debtPeriodNo: z.number().int().positive().nullable(),
   notePreview: z.string().nullable(),
   status: z.string(),
   participants: z.array(matchParticipantResponseSchema),
@@ -75,7 +202,136 @@ const moduleMatchHistoryItemSchema = z.object({
   createdAt: z.string()
 });
 
+const listDebtPeriodsQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().positive().max(100).default(20)
+});
+
 export async function registerMatchStakesRoutes(app: FastifyInstance, services: AppServices): Promise<void> {
+  app.get(
+    "/match-stakes/debt-periods/current",
+    {
+      schema: {
+        tags: ["Match Stakes"],
+        summary: "Get current open debt period with cumulative outstanding summary",
+        response: {
+          200: successResponseSchema(debtPeriodCurrentResponseSchema),
+          ...errorResponseSchemas
+        }
+      }
+    },
+    async () => ok(await services.matchStakes.getCurrentDebtPeriod())
+  );
+
+  app.get(
+    "/match-stakes/debt-periods",
+    {
+      schema: {
+        tags: ["Match Stakes"],
+        summary: "List match-stakes debt periods",
+        querystring: toSwaggerSchema(listDebtPeriodsQuerySchema),
+        response: {
+          200: successResponseSchema(z.array(debtPeriodListItemSchema), paginationMetaSchema),
+          ...errorResponseSchemas
+        }
+      }
+    },
+    async (request) => {
+      const query = listDebtPeriodsQuerySchema.parse(request.query);
+      const result = await services.matchStakes.listDebtPeriods(query);
+      return ok(result.items, {
+        page: query.page,
+        pageSize: query.pageSize,
+        total: result.total,
+        totalPages: Math.ceil(result.total / query.pageSize)
+      });
+    }
+  );
+
+  app.get(
+    "/match-stakes/debt-periods/:periodId",
+    {
+      schema: {
+        tags: ["Match Stakes"],
+        summary: "Get debt period detail with players and settlements",
+        params: toSwaggerSchema(periodIdParamSchema),
+        response: {
+          200: successResponseSchema(debtPeriodDetailResponseSchema),
+          ...errorResponseSchemas
+        }
+      }
+    },
+    async (request) => {
+      const params = periodIdParamSchema.parse(request.params);
+      return ok(await services.matchStakes.getDebtPeriodDetail(params.periodId));
+    }
+  );
+
+  app.post(
+    "/match-stakes/debt-periods",
+    {
+      schema: {
+        tags: ["Match Stakes"],
+        summary: "Create a new open match-stakes debt period",
+        body: toSwaggerSchema(createDebtPeriodBodySchema),
+        response: {
+          201: successResponseSchema(debtPeriodSchema),
+          ...errorResponseSchemas
+        }
+      }
+    },
+    async (request, reply) => {
+      const input = createDebtPeriodBodySchema.parse(request.body);
+      const created = await services.matchStakes.createDebtPeriod(input);
+      reply.status(201);
+      return ok(created);
+    }
+  );
+
+  app.post(
+    "/match-stakes/debt-periods/:periodId/settlements",
+    {
+      schema: {
+        tags: ["Match Stakes"],
+        summary: "Record real-world settlement payments in an open debt period",
+        params: toSwaggerSchema(periodIdParamSchema),
+        body: toSwaggerSchema(createSettlementBodySchema),
+        response: {
+          201: successResponseSchema(createSettlementResponseSchema),
+          ...errorResponseSchemas
+        }
+      }
+    },
+    async (request, reply) => {
+      const params = periodIdParamSchema.parse(request.params);
+      const body = createSettlementBodySchema.parse(request.body);
+      const created = await services.matchStakes.createDebtSettlement(params.periodId, body);
+      reply.status(201);
+      return ok(created);
+    }
+  );
+
+  app.post(
+    "/match-stakes/debt-periods/:periodId/close",
+    {
+      schema: {
+        tags: ["Match Stakes"],
+        summary: "Close an open debt period when outstanding balances are zero",
+        params: toSwaggerSchema(periodIdParamSchema),
+        body: toSwaggerSchema(closeDebtPeriodBodySchema),
+        response: {
+          200: successResponseSchema(closeDebtPeriodResponseSchema),
+          ...errorResponseSchemas
+        }
+      }
+    },
+    async (request) => {
+      const params = periodIdParamSchema.parse(request.params);
+      const body = closeDebtPeriodBodySchema.parse(request.body);
+      return ok(await services.matchStakes.closeDebtPeriod(params.periodId, body));
+    }
+  );
+
   app.get(
     "/match-stakes/summary",
     {
@@ -100,7 +356,7 @@ export async function registerMatchStakesRoutes(app: FastifyInstance, services: 
     {
       schema: {
         tags: ["Match Stakes"],
-        summary: "List match-stakes ledger entries",
+        summary: "List match-stakes ledger entries (legacy audit-oriented endpoint)",
         querystring: toSwaggerSchema(querySchema),
         response: {
           200: successResponseSchema(z.array(moduleLedgerItemSchema), paginationMetaSchema),
@@ -142,7 +398,8 @@ export async function registerMatchStakesRoutes(app: FastifyInstance, services: 
         summary: "List match-stakes match history",
         querystring: toSwaggerSchema(
           querySchema.extend({
-            ruleSetId: uuidSchema.optional()
+            ruleSetId: uuidSchema.optional(),
+            periodId: uuidSchema.optional()
           })
         ),
         response: {
@@ -154,7 +411,8 @@ export async function registerMatchStakesRoutes(app: FastifyInstance, services: 
     async (request) => {
       const query = querySchema
         .extend({
-          ruleSetId: uuidSchema.optional()
+          ruleSetId: uuidSchema.optional(),
+          periodId: uuidSchema.optional()
         })
         .parse(request.query);
 
@@ -162,6 +420,7 @@ export async function registerMatchStakesRoutes(app: FastifyInstance, services: 
         module: "MATCH_STAKES",
         playerId: query.playerId,
         ruleSetId: query.ruleSetId,
+        periodId: query.periodId,
         from: query.from,
         to: query.to,
         page: query.page,

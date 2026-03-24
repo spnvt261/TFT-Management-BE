@@ -1,4 +1,4 @@
-import type { ModuleType } from "./enums.js";
+import type { DebtPeriodStatus, ModuleType } from "./enums.js";
 
 export interface GroupRecord {
   id: string;
@@ -100,4 +100,17 @@ export interface LedgerEntryDraft {
   amountVnd: number;
   reasonText: string;
   lineNo: number;
+}
+
+export interface MatchStakesDebtPeriodRecord {
+  id: string;
+  groupId: string;
+  periodNo: number;
+  title: string | null;
+  note: string | null;
+  status: DebtPeriodStatus;
+  openedAt: string;
+  closedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }

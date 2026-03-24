@@ -159,11 +159,14 @@ export class MatchService {
         finalEvaluated.summary.netByPlayer,
         playersById
       );
+      const debtPeriod =
+        input.module === "MATCH_STAKES" ? await txRepositories.matchStakesDebt.getOrCreateOpenPeriod(this.groupId) : null;
 
       const persisted = await this.persistCreatedMatch({
         txRepositories,
         input,
         playedAt,
+        debtPeriodId: debtPeriod?.id ?? null,
         ruleSet: {
           id: ruleSet.id,
           name: ruleSet.name,
@@ -237,6 +240,7 @@ export class MatchService {
     status?: MatchStatus;
     playerId?: string;
     ruleSetId?: string;
+    periodId?: string;
     from?: string;
     to?: string;
     page: number;
@@ -248,6 +252,7 @@ export class MatchService {
       status: input.status,
       playerId: input.playerId,
       ruleSetId: input.ruleSetId,
+      periodId: input.periodId,
       from: input.from,
       to: input.to,
       page: input.page,
@@ -274,6 +279,8 @@ export class MatchService {
           ruleSetName: ruleSet?.name ?? "Unknown",
           ruleSetVersionId: match.rule_set_version_id,
           ruleSetVersionNo: match.rule_set_version_no ?? 1,
+          debtPeriodId: match.module === "MATCH_STAKES" ? match.debt_period_id : null,
+          debtPeriodNo: match.module === "MATCH_STAKES" ? (match.debt_period_no ?? null) : null,
           notePreview: note ? note.slice(0, 120) : null,
           status: match.status,
           confirmationMode: confirmation.confirmationMode,
@@ -336,6 +343,8 @@ export class MatchService {
           }
         : null,
       participants,
+      debtPeriodId: match.module === "MATCH_STAKES" ? match.debt_period_id : null,
+      debtPeriodNo: match.module === "MATCH_STAKES" ? (match.debt_period_no ?? null) : null,
       engineCalculationSnapshot: match.calculation_snapshot_json ?? null,
       settlement,
       voidReason: match.void_reason,
@@ -405,6 +414,7 @@ export class MatchService {
     txRepositories: RepositoryBundle;
     input: CreateMatchInput;
     playedAt: string;
+    debtPeriodId: string | null;
     ruleSet: {
       id: string;
       name: string;
@@ -444,6 +454,7 @@ export class MatchService {
       module: input.input.module,
       ruleSetId: input.input.ruleSetId,
       ruleSetVersionId: input.ruleVersion.id,
+      debtPeriodId: input.debtPeriodId,
       playedAt: input.playedAt,
       participantCount: input.input.participants.length,
       status: "POSTED",
