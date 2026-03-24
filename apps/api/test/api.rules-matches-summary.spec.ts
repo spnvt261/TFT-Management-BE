@@ -499,6 +499,23 @@ describe("API - rules, matches, summaries", () => {
     });
     expect(detailResponse.statusCode).toBe(200);
 
+    const timelineResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/match-stakes/debt-periods/${currentPeriod.id}/timeline`
+    });
+    expect(timelineResponse.statusCode).toBe(200);
+    expect(timelineResponse.json().data.period.id).toBe(currentPeriod.id);
+    expect(Array.isArray(timelineResponse.json().data.currentPlayers)).toBe(true);
+    expect(timelineResponse.json().data.timeline.length).toBeGreaterThanOrEqual(2);
+    expect(timelineResponse.json().data.timeline.at(-1).type).toBe("INITIAL");
+
+    const timelineWithoutInitialResponse = await app.inject({
+      method: "GET",
+      url: `/api/v1/match-stakes/debt-periods/${currentPeriod.id}/timeline?includeInitialSnapshot=false`
+    });
+    expect(timelineWithoutInitialResponse.statusCode).toBe(200);
+    expect(timelineWithoutInitialResponse.json().data.timeline.every((item: { type: string }) => item.type === "MATCH")).toBe(true);
+
     const createFirstSettlementResponse = await app.inject({
       method: "POST",
       url: `/api/v1/match-stakes/debt-periods/${currentPeriod.id}/settlements`,

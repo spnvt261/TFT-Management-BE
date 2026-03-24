@@ -261,6 +261,28 @@ export function createMockServices(): AppServices {
     return getCurrentOpenDebtPeriod() ?? createDebtPeriod({});
   };
 
+  const computeMatchStakesNets = (match: MatchRecord): Map<string, number> => {
+    const ranked = [...match.participants].sort((left, right) => left.tftPlacement - right.tftPlacement);
+    const winner = ranked[0];
+    const losers = ranked.slice(1);
+    const winnerGain = losers.length > 0 ? 100000 : 0;
+    const loserShare = losers.length > 0 ? Math.floor(winnerGain / losers.length) : 0;
+    let remaining = winnerGain;
+    const netByPlayer = new Map<string, number>();
+
+    if (winner) {
+      netByPlayer.set(winner.playerId, winnerGain);
+    }
+
+    for (const [index, loser] of losers.entries()) {
+      const amount = index === losers.length - 1 ? remaining : loserShare;
+      remaining -= amount;
+      netByPlayer.set(loser.playerId, -amount);
+    }
+
+    return netByPlayer;
+  };
+
   const buildDebtPeriodSummary = (periodId: string) => {
     const scopedMatches = Array.from(matches.values()).filter(
       (match) => match.module === "MATCH_STAKES" && match.debtPeriodId === periodId && match.status !== "VOIDED"
@@ -297,26 +319,13 @@ export function createMockServices(): AppServices {
     };
 
     for (const match of scopedMatches) {
-      const ranked = [...match.participants].sort((left, right) => left.tftPlacement - right.tftPlacement);
-      const winner = ranked[0];
-      const losers = ranked.slice(1);
-      const winnerGain = losers.length > 0 ? 100000 : 0;
-      const loserShare = losers.length > 0 ? Math.floor(winnerGain / losers.length) : 0;
-      let remaining = winnerGain;
-
-      if (winner) {
-        const winnerSummary = ensurePlayer(winner.playerId);
-        winnerSummary.accruedNetVnd += winnerGain;
+      const netByPlayer = computeMatchStakesNets(match);
+      for (const [playerId, netVnd] of netByPlayer.entries()) {
+        const item = ensurePlayer(playerId);
+        item.accruedNetVnd += netVnd;
       }
 
-      for (const [index, loser] of losers.entries()) {
-        const amount = index === losers.length - 1 ? remaining : loserShare;
-        remaining -= amount;
-        const loserSummary = ensurePlayer(loser.playerId);
-        loserSummary.accruedNetVnd -= amount;
-      }
-
-      for (const participant of ranked) {
+      for (const participant of match.participants) {
         const player = ensurePlayer(participant.playerId);
         player.totalMatches += 1;
       }
@@ -350,6 +359,112 @@ export function createMockServices(): AppServices {
     return {
       players: playersSummary,
       summary
+    };
+  };
+
+  const buildDebtPeriodTimeline = (periodId: string, includeInitialSnapshot = true) => {
+    const period = debtPeriods.find((item) => item.id === periodId);
+    if (!period) {
+      throw new AppError(404, "DEBT_PERIOD_NOT_FOUND", "Debt period not found");
+    }
+
+    const computed = buildDebtPeriodSummary(period.id);
+    const scopedMatches = Array.from(matches.values())
+      .filter((match) => match.module === "MATCH_STAKES" && match.debtPeriodId === period.id && match.status !== "VOIDED")
+      .sort((left, right) => new Date(left.playedAt).getTime() - new Date(right.playedAt).getTime());
+
+    const playerScope = computed.players.map((item) => ({
+      playerId: item.playerId,
+      playerName: item.playerName
+    }));
+    const cumulativeByPlayer = new Map(playerScope.map((item) => [item.playerId, 0]));
+
+    const timelineAscending = scopedMatches.map((match, index) => {
+      const sortedParticipants = [...match.participants].sort((left, right) => left.tftPlacement - right.tftPlacement);
+      const netByPlayer = computeMatchStakesNets(match);
+      const participantByPlayerId = new Map(
+        sortedParticipants.map((participant, participantIndex) => [
+          participant.playerId,
+          {
+            tftPlacement: participant.tftPlacement,
+            relativeRank: participantIndex + 1
+          }
+        ])
+      );
+
+      const rows = playerScope
+        .map((player) => {
+          const participant = participantByPlayerId.get(player.playerId);
+          const matchNetVnd = netByPlayer.get(player.playerId) ?? 0;
+          const cumulativeNetVnd = (cumulativeByPlayer.get(player.playerId) ?? 0) + matchNetVnd;
+          cumulativeByPlayer.set(player.playerId, cumulativeNetVnd);
+
+          return {
+            playerId: player.playerId,
+            playerName: player.playerName,
+            tftPlacement: participant?.tftPlacement ?? null,
+            relativeRank: participant?.relativeRank ?? null,
+            matchNetVnd,
+            cumulativeNetVnd
+          };
+        })
+        .sort((left, right) => {
+          const leftRank = left.relativeRank ?? Number.MAX_SAFE_INTEGER;
+          const rightRank = right.relativeRank ?? Number.MAX_SAFE_INTEGER;
+          if (leftRank !== rightRank) {
+            return leftRank - rightRank;
+          }
+          const byName = left.playerName.localeCompare(right.playerName);
+          if (byName !== 0) {
+            return byName;
+          }
+          return left.playerId.localeCompare(right.playerId);
+        });
+
+      return {
+        type: "MATCH" as const,
+        matchId: match.id,
+        playedAt: match.playedAt,
+        matchNo: index + 1,
+        participantCount: match.participantCount,
+        status: match.status,
+        rows
+      };
+    });
+
+    const timeline = [...timelineAscending].reverse();
+    if (includeInitialSnapshot) {
+      timeline.push({
+        type: "INITIAL" as const,
+        matchId: null,
+        playedAt: null,
+        matchNo: null,
+        participantCount: null,
+        status: null,
+        rows: playerScope
+          .map((player) => ({
+            playerId: player.playerId,
+            playerName: player.playerName,
+            tftPlacement: null,
+            relativeRank: null,
+            matchNetVnd: 0,
+            cumulativeNetVnd: 0
+          }))
+          .sort((left, right) => {
+            const byName = left.playerName.localeCompare(right.playerName);
+            if (byName !== 0) {
+              return byName;
+            }
+            return left.playerId.localeCompare(right.playerId);
+          })
+      });
+    }
+
+    return {
+      period,
+      summary: computed.summary,
+      currentPlayers: computed.players,
+      timeline
     };
   };
 
@@ -1040,6 +1155,9 @@ export function createMockServices(): AppServices {
           settlements,
           recentMatches
         };
+      },
+      getDebtPeriodTimeline: async (periodId, input) => {
+        return buildDebtPeriodTimeline(periodId, input?.includeInitialSnapshot ?? true);
       },
       createDebtPeriod: async (input) => {
         return createDebtPeriod(input ?? {});

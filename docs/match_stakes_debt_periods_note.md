@@ -29,6 +29,7 @@
 - `GET /api/v1/match-stakes/debt-periods/current`
 - `GET /api/v1/match-stakes/debt-periods`
 - `GET /api/v1/match-stakes/debt-periods/:periodId`
+- `GET /api/v1/match-stakes/debt-periods/:periodId/timeline`
 - `POST /api/v1/match-stakes/debt-periods`
 - `POST /api/v1/match-stakes/debt-periods/:periodId/settlements`
 - `POST /api/v1/match-stakes/debt-periods/:periodId/close`

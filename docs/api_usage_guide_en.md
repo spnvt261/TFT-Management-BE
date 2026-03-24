@@ -137,6 +137,7 @@ type MatchStakesPenaltyDestinationSelectorType =
 | GET | `/api/v1/match-stakes/debt-periods/current` | Current open Match Stakes debt period with cumulative summary |
 | GET | `/api/v1/match-stakes/debt-periods` | List Match Stakes debt periods |
 | GET | `/api/v1/match-stakes/debt-periods/:periodId` | Match Stakes debt period detail |
+| GET | `/api/v1/match-stakes/debt-periods/:periodId/timeline` | Match Stakes debt period timeline for debt screen |
 | POST | `/api/v1/match-stakes/debt-periods` | Create a new open Match Stakes debt period |
 | POST | `/api/v1/match-stakes/debt-periods/:periodId/settlements` | Record real-world debt settlement lines |
 | POST | `/api/v1/match-stakes/debt-periods/:periodId/close` | Close a Match Stakes debt period |
@@ -1295,6 +1296,53 @@ ApiSuccessResponse<{
     debtPeriodId: string | null;
     debtPeriodNo: number | null;
   }>;
+}>;
+```
+
+Main errors:
+
+- `404 DEBT_PERIOD_NOT_FOUND`.
+
+### GET `/api/v1/match-stakes/debt-periods/:periodId/timeline`
+
+Business purpose: return a frontend-ready debt timeline for one period (newest-first), including current outstanding players and optional initial zero snapshot.
+
+Request DTO:
+
+```ts
+interface DebtPeriodTimelineRequest {
+  periodId: string; // path param, uuid
+  includeInitialSnapshot?: boolean; // query, default true
+}
+```
+
+Response DTO:
+
+```ts
+interface DebtPeriodTimelinePlayerRowDto {
+  playerId: string;
+  playerName: string;
+  tftPlacement: number | null;
+  relativeRank: number | null;
+  matchNetVnd: number;
+  cumulativeNetVnd: number;
+}
+
+interface DebtPeriodTimelineItemDto {
+  type: "MATCH" | "INITIAL";
+  matchId: string | null;
+  playedAt: string | null;
+  matchNo: number | null; // 1-based within the period
+  participantCount: number | null;
+  status: string | null;
+  rows: DebtPeriodTimelinePlayerRowDto[];
+}
+
+ApiSuccessResponse<{
+  period: DebtPeriodDto;
+  summary: DebtPeriodSummaryDto;
+  currentPlayers: DebtPeriodPlayerSummaryDto[];
+  timeline: DebtPeriodTimelineItemDto[];
 }>;
 ```
 

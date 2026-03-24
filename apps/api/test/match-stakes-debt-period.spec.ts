@@ -47,6 +47,8 @@ function createFixture() {
       listPeriods: vi.fn(),
       listPeriodPlayerAggregates: vi.fn(),
       countNonVoidedMatchesInPeriod: vi.fn(),
+      listNonVoidedPeriodMatches: vi.fn(),
+      listMatchParticipantsByMatchIds: vi.fn(),
       listSettlementsWithLines: vi.fn(),
       createOpenPeriod: vi.fn(),
       createSettlement: vi.fn(),
@@ -221,6 +223,175 @@ describe("match-stakes debt period service", () => {
     expect(result.settlements).toHaveLength(1);
     expect(result.recentMatches).toHaveLength(1);
     expect(result.summary.totalOutstandingReceiveVnd).toBe(50000);
+  });
+
+  it("returns debt-period timeline newest-first with initial snapshot", async () => {
+    const { service, repositories } = createFixture();
+    repositories.matchStakesDebt.getPeriodById.mockResolvedValue(openPeriod);
+    repositories.matchStakesDebt.listPeriodPlayerAggregates.mockResolvedValue([
+      {
+        playerId: "10000000-0000-4000-8000-000000000001",
+        playerName: "An",
+        totalMatches: 2,
+        accruedNetVnd: 300000,
+        settledPaidVnd: 0,
+        settledReceivedVnd: 0
+      },
+      {
+        playerId: "10000000-0000-4000-8000-000000000002",
+        playerName: "Binh",
+        totalMatches: 2,
+        accruedNetVnd: -150000,
+        settledPaidVnd: 0,
+        settledReceivedVnd: 0
+      },
+      {
+        playerId: "10000000-0000-4000-8000-000000000003",
+        playerName: "Chi",
+        totalMatches: 2,
+        accruedNetVnd: -150000,
+        settledPaidVnd: 0,
+        settledReceivedVnd: 0
+      },
+      {
+        playerId: "10000000-0000-4000-8000-000000000004",
+        playerName: "Dung",
+        totalMatches: 0,
+        accruedNetVnd: 0,
+        settledPaidVnd: 0,
+        settledReceivedVnd: 0
+      }
+    ]);
+    repositories.matchStakesDebt.countNonVoidedMatchesInPeriod.mockResolvedValue(2);
+    repositories.matchStakesDebt.listNonVoidedPeriodMatches.mockResolvedValue([
+      {
+        id: "match-1",
+        playedAt: "2026-01-01T00:00:00.000Z",
+        participantCount: 3,
+        status: "POSTED",
+        createdAt: "2026-01-01T00:00:00.000Z"
+      },
+      {
+        id: "match-2",
+        playedAt: "2026-01-02T00:00:00.000Z",
+        participantCount: 3,
+        status: "POSTED",
+        createdAt: "2026-01-02T00:00:00.000Z"
+      }
+    ]);
+    repositories.matchStakesDebt.listMatchParticipantsByMatchIds.mockResolvedValue([
+      {
+        matchId: "match-1",
+        playerId: "10000000-0000-4000-8000-000000000001",
+        playerName: "An",
+        tftPlacement: 1,
+        relativeRank: 1,
+        settlementNetVnd: 100000
+      },
+      {
+        matchId: "match-1",
+        playerId: "10000000-0000-4000-8000-000000000002",
+        playerName: "Binh",
+        tftPlacement: 2,
+        relativeRank: 2,
+        settlementNetVnd: -50000
+      },
+      {
+        matchId: "match-1",
+        playerId: "10000000-0000-4000-8000-000000000003",
+        playerName: "Chi",
+        tftPlacement: 3,
+        relativeRank: 3,
+        settlementNetVnd: -50000
+      },
+      {
+        matchId: "match-2",
+        playerId: "10000000-0000-4000-8000-000000000001",
+        playerName: "An",
+        tftPlacement: 1,
+        relativeRank: 1,
+        settlementNetVnd: 200000
+      },
+      {
+        matchId: "match-2",
+        playerId: "10000000-0000-4000-8000-000000000002",
+        playerName: "Binh",
+        tftPlacement: 2,
+        relativeRank: 2,
+        settlementNetVnd: -100000
+      },
+      {
+        matchId: "match-2",
+        playerId: "10000000-0000-4000-8000-000000000003",
+        playerName: "Chi",
+        tftPlacement: 3,
+        relativeRank: 3,
+        settlementNetVnd: -100000
+      }
+    ]);
+
+    const result = await service.getDebtPeriodTimeline(openPeriod.id);
+
+    expect(result.currentPlayers).toHaveLength(4);
+    expect(result.timeline).toHaveLength(3);
+    expect(result.timeline[0]?.type).toBe("MATCH");
+    expect(result.timeline[0]?.matchId).toBe("match-2");
+    expect(result.timeline[0]?.matchNo).toBe(2);
+    expect(result.timeline[1]?.matchId).toBe("match-1");
+    expect(result.timeline[2]?.type).toBe("INITIAL");
+
+    const latestByPlayer = new Map(result.timeline[0]?.rows.map((row) => [row.playerId, row]));
+    expect(latestByPlayer.get("10000000-0000-4000-8000-000000000001")?.cumulativeNetVnd).toBe(300000);
+    expect(latestByPlayer.get("10000000-0000-4000-8000-000000000002")?.cumulativeNetVnd).toBe(-150000);
+    expect(latestByPlayer.get("10000000-0000-4000-8000-000000000003")?.cumulativeNetVnd).toBe(-150000);
+    expect(latestByPlayer.get("10000000-0000-4000-8000-000000000004")?.cumulativeNetVnd).toBe(0);
+    expect(latestByPlayer.get("10000000-0000-4000-8000-000000000004")?.tftPlacement).toBeNull();
+
+    const initialByPlayer = new Map(result.timeline[2]?.rows.map((row) => [row.playerId, row]));
+    expect(initialByPlayer.get("10000000-0000-4000-8000-000000000001")?.cumulativeNetVnd).toBe(0);
+    expect(initialByPlayer.get("10000000-0000-4000-8000-000000000002")?.cumulativeNetVnd).toBe(0);
+    expect(initialByPlayer.get("10000000-0000-4000-8000-000000000003")?.cumulativeNetVnd).toBe(0);
+    expect(initialByPlayer.get("10000000-0000-4000-8000-000000000004")?.cumulativeNetVnd).toBe(0);
+  });
+
+  it("omits initial snapshot when includeInitialSnapshot=false", async () => {
+    const { service, repositories } = createFixture();
+    repositories.matchStakesDebt.getPeriodById.mockResolvedValue(openPeriod);
+    repositories.matchStakesDebt.listPeriodPlayerAggregates.mockResolvedValue([
+      {
+        playerId: "10000000-0000-4000-8000-000000000001",
+        playerName: "An",
+        totalMatches: 1,
+        accruedNetVnd: 100000,
+        settledPaidVnd: 0,
+        settledReceivedVnd: 0
+      }
+    ]);
+    repositories.matchStakesDebt.countNonVoidedMatchesInPeriod.mockResolvedValue(1);
+    repositories.matchStakesDebt.listNonVoidedPeriodMatches.mockResolvedValue([
+      {
+        id: "match-1",
+        playedAt: "2026-01-01T00:00:00.000Z",
+        participantCount: 3,
+        status: "POSTED",
+        createdAt: "2026-01-01T00:00:00.000Z"
+      }
+    ]);
+    repositories.matchStakesDebt.listMatchParticipantsByMatchIds.mockResolvedValue([
+      {
+        matchId: "match-1",
+        playerId: "10000000-0000-4000-8000-000000000001",
+        playerName: "An",
+        tftPlacement: 1,
+        relativeRank: 1,
+        settlementNetVnd: 100000
+      }
+    ]);
+
+    const result = await service.getDebtPeriodTimeline(openPeriod.id, { includeInitialSnapshot: false });
+
+    expect(result.timeline).toHaveLength(1);
+    expect(result.timeline[0]?.type).toBe("MATCH");
   });
 
   it("records settlement lines and returns updated summary", async () => {

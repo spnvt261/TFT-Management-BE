@@ -21,6 +21,30 @@ interface DebtPeriodSummarySnapshot {
   totalOutstandingPayVnd: number;
 }
 
+interface DebtPeriodTimelinePlayerScopeItem {
+  playerId: string;
+  playerName: string;
+}
+
+interface DebtPeriodTimelinePlayerRowItem {
+  playerId: string;
+  playerName: string;
+  tftPlacement: number | null;
+  relativeRank: number | null;
+  matchNetVnd: number;
+  cumulativeNetVnd: number;
+}
+
+interface DebtPeriodTimelineItem {
+  type: "MATCH" | "INITIAL";
+  matchId: string | null;
+  playedAt: string | null;
+  matchNo: number | null;
+  participantCount: number | null;
+  status: string | null;
+  rows: DebtPeriodTimelinePlayerRowItem[];
+}
+
 function toPeriodDto(period: MatchStakesDebtPeriodRecord) {
   return {
     id: period.id,
@@ -48,6 +72,23 @@ function sortPlayers(items: DebtPeriodPlayerSummaryItem[]): DebtPeriodPlayerSumm
 
     if (leftBucket === 2 && left.outstandingNetVnd !== right.outstandingNetVnd) {
       return left.outstandingNetVnd - right.outstandingNetVnd;
+    }
+
+    const byName = left.playerName.localeCompare(right.playerName);
+    if (byName !== 0) {
+      return byName;
+    }
+
+    return left.playerId.localeCompare(right.playerId);
+  });
+}
+
+function sortTimelineRows(rows: DebtPeriodTimelinePlayerRowItem[]): DebtPeriodTimelinePlayerRowItem[] {
+  return [...rows].sort((left, right) => {
+    const leftRank = left.relativeRank ?? Number.MAX_SAFE_INTEGER;
+    const rightRank = right.relativeRank ?? Number.MAX_SAFE_INTEGER;
+    if (leftRank !== rightRank) {
+      return leftRank - rightRank;
     }
 
     const byName = left.playerName.localeCompare(right.playerName);
@@ -161,6 +202,98 @@ export class MatchStakesService {
         debtPeriodId: match.debt_period_id,
         debtPeriodNo: match.debt_period_no ?? null
       }))
+    };
+  }
+
+  public async getDebtPeriodTimeline(periodId: string, input?: { includeInitialSnapshot?: boolean }) {
+    const period = await this.repositories.matchStakesDebt.getPeriodById(this.groupId, periodId);
+    if (!period) {
+      throw notFound("DEBT_PERIOD_NOT_FOUND", "Debt period not found");
+    }
+
+    const includeInitialSnapshot = input?.includeInitialSnapshot ?? true;
+    const summary = await this.buildDebtPeriodSummary(this.repositories, period.id);
+
+    const periodMatches = await this.repositories.matchStakesDebt.listNonVoidedPeriodMatches({
+      groupId: this.groupId,
+      debtPeriodId: period.id
+    });
+
+    const participants = await this.repositories.matchStakesDebt.listMatchParticipantsByMatchIds(
+      periodMatches.map((match) => match.id)
+    );
+
+    const participantsByMatchId = new Map<string, typeof participants>();
+    for (const participant of participants) {
+      const current = participantsByMatchId.get(participant.matchId) ?? [];
+      current.push(participant);
+      participantsByMatchId.set(participant.matchId, current);
+    }
+
+    const playerScope: DebtPeriodTimelinePlayerScopeItem[] = summary.players.map((item) => ({
+      playerId: item.playerId,
+      playerName: item.playerName
+    }));
+
+    const cumulativeByPlayer = new Map(playerScope.map((item) => [item.playerId, 0]));
+    const timelineAscending: DebtPeriodTimelineItem[] = periodMatches.map((match, index) => {
+      const matchParticipants = participantsByMatchId.get(match.id) ?? [];
+      const participantByPlayerId = new Map(matchParticipants.map((participant) => [participant.playerId, participant]));
+
+      const rows = playerScope.map((player) => {
+        const participant = participantByPlayerId.get(player.playerId);
+        const matchNetVnd = participant?.settlementNetVnd ?? 0;
+        const cumulativeNetVnd = (cumulativeByPlayer.get(player.playerId) ?? 0) + matchNetVnd;
+        cumulativeByPlayer.set(player.playerId, cumulativeNetVnd);
+
+        return {
+          playerId: player.playerId,
+          playerName: player.playerName,
+          tftPlacement: participant?.tftPlacement ?? null,
+          relativeRank: participant?.relativeRank ?? null,
+          matchNetVnd,
+          cumulativeNetVnd
+        };
+      });
+
+      return {
+        type: "MATCH" as const,
+        matchId: match.id,
+        playedAt: match.playedAt,
+        matchNo: index + 1,
+        participantCount: match.participantCount,
+        status: match.status,
+        rows: sortTimelineRows(rows)
+      };
+    });
+
+    const timeline = [...timelineAscending].reverse();
+    if (includeInitialSnapshot) {
+      timeline.push({
+        type: "INITIAL" as const,
+        matchId: null,
+        playedAt: null,
+        matchNo: null,
+        participantCount: null,
+        status: null,
+        rows: sortTimelineRows(
+          playerScope.map((player) => ({
+            playerId: player.playerId,
+            playerName: player.playerName,
+            tftPlacement: null,
+            relativeRank: null,
+            matchNetVnd: 0,
+            cumulativeNetVnd: 0
+          }))
+        )
+      });
+    }
+
+    return {
+      period: toPeriodDto(period),
+      summary: summary.summary,
+      currentPlayers: summary.players,
+      timeline
     };
   }
 

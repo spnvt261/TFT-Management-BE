@@ -51,6 +51,29 @@ const closeDebtPeriodBodySchema = z.object({
   note: z.string().max(4000).nullable().optional()
 });
 
+const debtPeriodTimelineQuerySchema = z.object({
+  includeInitialSnapshot: z
+    .preprocess((value) => {
+      if (value === undefined || value === null) {
+        return undefined;
+      }
+
+      if (typeof value === "string") {
+        const normalized = value.trim().toLowerCase();
+        if (normalized === "true" || normalized === "1") {
+          return true;
+        }
+        if (normalized === "false" || normalized === "0") {
+          return false;
+        }
+      }
+
+      return value;
+    }, z.boolean())
+    .optional()
+    .default(true)
+});
+
 const debtPeriodSchema = z.object({
   id: uuidSchema,
   periodNo: z.number().int().positive(),
@@ -126,6 +149,32 @@ const debtPeriodDetailResponseSchema = z.object({
       debtPeriodNo: z.number().int().positive().nullable()
     })
   )
+});
+
+const debtPeriodTimelinePlayerRowSchema = z.object({
+  playerId: uuidSchema,
+  playerName: z.string(),
+  tftPlacement: z.number().int().nullable(),
+  relativeRank: z.number().int().nullable(),
+  matchNetVnd: z.number().int(),
+  cumulativeNetVnd: z.number().int()
+});
+
+const debtPeriodTimelineItemSchema = z.object({
+  type: z.union([z.literal("MATCH"), z.literal("INITIAL")]),
+  matchId: uuidSchema.nullable(),
+  playedAt: z.string().nullable(),
+  matchNo: z.number().int().positive().nullable(),
+  participantCount: z.number().int().positive().nullable(),
+  status: z.string().nullable(),
+  rows: z.array(debtPeriodTimelinePlayerRowSchema)
+});
+
+const debtPeriodTimelineResponseSchema = z.object({
+  period: debtPeriodSchema,
+  summary: debtPeriodSummarySchema,
+  currentPlayers: z.array(debtPeriodPlayerSummarySchema),
+  timeline: z.array(debtPeriodTimelineItemSchema)
 });
 
 const createSettlementResponseSchema = z.object({
@@ -245,6 +294,31 @@ export async function registerMatchStakesRoutes(app: FastifyInstance, services: 
         total: result.total,
         totalPages: Math.ceil(result.total / query.pageSize)
       });
+    }
+  );
+
+  app.get(
+    "/match-stakes/debt-periods/:periodId/timeline",
+    {
+      schema: {
+        tags: ["Match Stakes"],
+        summary: "Get debt period timeline with cumulative per-match debt history",
+        params: toSwaggerSchema(periodIdParamSchema),
+        querystring: toSwaggerSchema(debtPeriodTimelineQuerySchema),
+        response: {
+          200: successResponseSchema(debtPeriodTimelineResponseSchema),
+          ...errorResponseSchemas
+        }
+      }
+    },
+    async (request) => {
+      const params = periodIdParamSchema.parse(request.params);
+      const query = debtPeriodTimelineQuerySchema.parse(request.query);
+      return ok(
+        await services.matchStakes.getDebtPeriodTimeline(params.periodId, {
+          includeInitialSnapshot: query.includeInitialSnapshot
+        })
+      );
     }
   );
 

@@ -48,6 +48,23 @@ export interface DebtSettlementLineInsertInput {
   note: string | null;
 }
 
+export interface DebtPeriodMatchTimelineRow {
+  id: string;
+  playedAt: string;
+  participantCount: number;
+  status: string;
+  createdAt: string;
+}
+
+export interface DebtPeriodMatchParticipantTimelineRow {
+  matchId: string;
+  playerId: string;
+  playerName: string;
+  tftPlacement: number;
+  relativeRank: number;
+  settlementNetVnd: number;
+}
+
 export class MatchStakesDebtRepository {
   public constructor(private readonly db: Queryable) {}
 
@@ -314,6 +331,74 @@ export class MatchStakesDebtRepository {
     );
 
     return Number(result.rows[0]?.count ?? "0");
+  }
+
+  public async listNonVoidedPeriodMatches(input: { groupId: string; debtPeriodId: string }): Promise<DebtPeriodMatchTimelineRow[]> {
+    const result = await this.db.query<{
+      id: string;
+      played_at: string;
+      participant_count: number;
+      status: string;
+      created_at: string;
+    }>(
+      `
+      SELECT id, played_at, participant_count, status, created_at
+      FROM matches
+      WHERE group_id = $1
+        AND module = 'MATCH_STAKES'
+        AND debt_period_id = $2
+        AND status <> 'VOIDED'
+      ORDER BY played_at ASC, created_at ASC
+      `,
+      [input.groupId, input.debtPeriodId]
+    );
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      playedAt: row.played_at,
+      participantCount: row.participant_count,
+      status: row.status,
+      createdAt: row.created_at
+    }));
+  }
+
+  public async listMatchParticipantsByMatchIds(matchIds: string[]): Promise<DebtPeriodMatchParticipantTimelineRow[]> {
+    if (matchIds.length === 0) {
+      return [];
+    }
+
+    const result = await this.db.query<{
+      match_id: string;
+      player_id: string;
+      player_name: string;
+      tft_placement: number;
+      relative_rank: number;
+      settlement_net_vnd: number;
+    }>(
+      `
+      SELECT
+        mp.match_id,
+        mp.player_id,
+        p.display_name AS player_name,
+        mp.tft_placement,
+        mp.relative_rank,
+        mp.settlement_net_vnd
+      FROM match_participants mp
+      INNER JOIN players p ON p.id = mp.player_id
+      WHERE mp.match_id = ANY($1::uuid[])
+      ORDER BY mp.match_id ASC, mp.relative_rank ASC, mp.created_at ASC
+      `,
+      [matchIds]
+    );
+
+    return result.rows.map((row) => ({
+      matchId: row.match_id,
+      playerId: row.player_id,
+      playerName: row.player_name,
+      tftPlacement: row.tft_placement,
+      relativeRank: row.relative_rank,
+      settlementNetVnd: row.settlement_net_vnd
+    }));
   }
 
   public async createSettlement(input: {
