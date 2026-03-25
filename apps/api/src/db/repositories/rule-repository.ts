@@ -71,6 +71,10 @@ export interface CreateRuleSetVersionInput {
   rules: CreateRuleVersionRuleInput[];
 }
 
+function toJsonDbParam(value: unknown): string {
+  return JSON.stringify(value ?? null);
+}
+
 function mapRuleSet(row: {
   id: string;
   module: string;
@@ -414,9 +418,9 @@ export class RuleRepository {
         input.effectiveFrom,
         input.effectiveTo,
         input.isActive,
-        input.summaryJson,
+        toJsonDbParam(input.summaryJson),
         input.builderType,
-        input.builderConfig
+        toJsonDbParam(input.builderConfig)
       ]
     );
 
@@ -457,7 +461,7 @@ export class RuleRepository {
           rule.priority,
           rule.status,
           rule.stopProcessingOnMatch,
-          rule.metadata
+          toJsonDbParam(rule.metadata)
         ]
       );
 
@@ -469,7 +473,7 @@ export class RuleRepository {
           INSERT INTO rule_conditions(rule_id, condition_key, operator, value_json, sort_order)
           VALUES ($1, $2, $3, $4, $5)
           `,
-          [ruleId, condition.conditionKey, condition.operator, condition.valueJson, condition.sortOrder]
+          [ruleId, condition.conditionKey, condition.operator, toJsonDbParam(condition.valueJson), condition.sortOrder]
         );
       }
 
@@ -487,9 +491,9 @@ export class RuleRepository {
             action.actionType,
             action.amountVnd,
             action.sourceSelectorType,
-            action.sourceSelectorJson,
+            toJsonDbParam(action.sourceSelectorJson),
             action.destinationSelectorType,
-            action.destinationSelectorJson,
+            toJsonDbParam(action.destinationSelectorJson),
             action.descriptionTemplate,
             action.sortOrder
           ]
