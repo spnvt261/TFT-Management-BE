@@ -18,6 +18,7 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
         tags: ["System"],
         summary: "Health check",
         description: "Returns backend service status and current server timestamp.",
+        security: [],
         response: {
           200: successResponseSchema(healthDataSchema),
           ...errorResponseSchemas

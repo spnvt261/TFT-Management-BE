@@ -8,6 +8,14 @@ export interface GroupRecord {
   currencyCode: string;
 }
 
+export interface RoleRecord {
+  id: string;
+  code: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface PlayerRecord {
   id: string;
   displayName: string;

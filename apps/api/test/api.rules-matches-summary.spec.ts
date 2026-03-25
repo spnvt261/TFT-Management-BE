@@ -1,25 +1,43 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { createMockServices } from "./helpers/mock-services.js";
+import { loginAndGetAuthHeaders } from "./helpers/auth.js";
 
 describe("API - rules, matches, summaries", () => {
   let app: Awaited<ReturnType<typeof createApp>> | null = null;
+  let adminHeaders: Record<string, string> = {};
+
+  async function injectAsAdmin(options: any): Promise<any> {
+    if (!app) {
+      throw new Error("App is not initialized");
+    }
+
+    return app.inject({
+      ...options,
+      headers: {
+        ...(options.headers ?? {}),
+        ...adminHeaders
+      }
+    });
+  }
 
   afterEach(async () => {
     if (app) {
       await app.close();
       app = null;
     }
+    adminHeaders = {};
   });
 
   it("supports rule endpoints with internal immutable versioning", async () => {
     app = await createApp(createMockServices());
+    adminHeaders = await loginAndGetAuthHeaders(app);
 
-    const listResponse = await app.inject({ method: "GET", url: "/api/v1/rule-sets?page=1&pageSize=20" });
+    const listResponse = await injectAsAdmin({ method: "GET", url: "/api/v1/rule-sets?page=1&pageSize=20" });
     expect(listResponse.statusCode).toBe(200);
     expect(listResponse.json().data.length).toBeGreaterThanOrEqual(2);
 
-    const createRuleResponse = await app.inject({
+    const createRuleResponse = await injectAsAdmin({
       method: "POST",
       url: "/api/v1/rule-sets",
       payload: {
@@ -52,7 +70,7 @@ describe("API - rules, matches, summaries", () => {
     expect(createRuleResponse.json().data.latestVersion.builderType).toBe("MATCH_STAKES_PAYOUT");
     expect(createRuleResponse.json().data.latestVersion.builderConfig.participantCount).toBe(3);
 
-    const detailAfterCreateResponse = await app.inject({
+    const detailAfterCreateResponse = await injectAsAdmin({
       method: "GET",
       url: `/api/v1/rule-sets/${ruleSetId}`
     });
@@ -60,7 +78,7 @@ describe("API - rules, matches, summaries", () => {
     expect(detailAfterCreateResponse.json().data.latestVersion.id).toBe(firstVersionId);
     expect(detailAfterCreateResponse.json().data.versions).toHaveLength(1);
 
-    const editRuleResponse = await app.inject({
+    const editRuleResponse = await injectAsAdmin({
       method: "PATCH",
       url: `/api/v1/rule-sets/${ruleSetId}`,
       payload: {
@@ -110,7 +128,7 @@ describe("API - rules, matches, summaries", () => {
     expect(previousVersion.isActive).toBe(false);
     expect(previousVersion.effectiveTo).not.toBeNull();
 
-    const editAgainResponse = await app.inject({
+    const editAgainResponse = await injectAsAdmin({
       method: "PATCH",
       url: `/api/v1/rule-sets/${ruleSetId}`,
       payload: {
@@ -154,7 +172,7 @@ describe("API - rules, matches, summaries", () => {
     expect(lastVersionAfterSecondEdit.isActive).toBe(false);
     expect(lastVersionAfterSecondEdit.effectiveTo).not.toBeNull();
 
-    const ruleSetDetailAfterEditResponse = await app.inject({
+    const ruleSetDetailAfterEditResponse = await injectAsAdmin({
       method: "GET",
       url: `/api/v1/rule-sets/${ruleSetId}`
     });
@@ -162,7 +180,7 @@ describe("API - rules, matches, summaries", () => {
     expect(ruleSetDetailAfterEditResponse.json().data.latestVersion.id).toBe(editAgainResponse.json().data.latestVersion.id);
     expect(ruleSetDetailAfterEditResponse.json().data.versions.length).toBeGreaterThanOrEqual(3);
 
-    const conflictModeResponse = await app.inject({
+    const conflictModeResponse = await injectAsAdmin({
       method: "PATCH",
       url: `/api/v1/rule-sets/${ruleSetId}`,
       payload: {
@@ -207,34 +225,34 @@ describe("API - rules, matches, summaries", () => {
     });
     expect(conflictModeResponse.statusCode).toBe(400);
 
-    const removedCreateVersionApiResponse = await app.inject({
+    const removedCreateVersionApiResponse = await injectAsAdmin({
       method: "POST",
       url: `/api/v1/rule-sets/${ruleSetId}/versions`,
       payload: {}
     });
     expect(removedCreateVersionApiResponse.statusCode).toBe(404);
 
-    const removedGetVersionApiResponse = await app.inject({
+    const removedGetVersionApiResponse = await injectAsAdmin({
       method: "GET",
       url: `/api/v1/rule-sets/${ruleSetId}/versions/${firstVersionId}`
     });
     expect(removedGetVersionApiResponse.statusCode).toBe(404);
 
-    const defaultResponse = await app.inject({
+    const defaultResponse = await injectAsAdmin({
       method: "GET",
       url: "/api/v1/rule-sets/default/by-module/MATCH_STAKES"
     });
     expect(defaultResponse.statusCode).toBe(200);
     expect(defaultResponse.json().data.activeVersion).toBeNull();
 
-    const defaultWithParticipantCountResponse = await app.inject({
+    const defaultWithParticipantCountResponse = await injectAsAdmin({
       method: "GET",
       url: "/api/v1/rule-sets/default/by-module/MATCH_STAKES?participantCount=4"
     });
     expect(defaultWithParticipantCountResponse.statusCode).toBe(200);
     expect(defaultWithParticipantCountResponse.json().data.activeVersion).not.toBeNull();
 
-    const invalidParticipantCountResponse = await app.inject({
+    const invalidParticipantCountResponse = await injectAsAdmin({
       method: "GET",
       url: "/api/v1/rule-sets/default/by-module/MATCH_STAKES?participantCount=5"
     });
@@ -243,8 +261,9 @@ describe("API - rules, matches, summaries", () => {
 
   it("supports rule list filters by status/default/modules/search/date", async () => {
     app = await createApp(createMockServices());
+    adminHeaders = await loginAndGetAuthHeaders(app);
 
-    const createInactiveMatchStakes = await app.inject({
+    const createInactiveMatchStakes = await injectAsAdmin({
       method: "POST",
       url: "/api/v1/rule-sets",
       payload: {
@@ -270,7 +289,7 @@ describe("API - rules, matches, summaries", () => {
     });
     expect(createInactiveMatchStakes.statusCode).toBe(201);
 
-    const createInactiveGroupFund = await app.inject({
+    const createInactiveGroupFund = await injectAsAdmin({
       method: "POST",
       url: "/api/v1/rule-sets",
       payload: {
@@ -310,7 +329,7 @@ describe("API - rules, matches, summaries", () => {
     });
     expect(createInactiveGroupFund.statusCode).toBe(201);
 
-    const statusResponse = await app.inject({
+    const statusResponse = await injectAsAdmin({
       method: "GET",
       url: "/api/v1/rule-sets?status=INACTIVE&page=1&pageSize=20"
     });
@@ -318,7 +337,7 @@ describe("API - rules, matches, summaries", () => {
     expect(statusResponse.json().data.length).toBeGreaterThanOrEqual(2);
     expect(statusResponse.json().data.every((item: { status: string }) => item.status === "INACTIVE")).toBe(true);
 
-    const defaultAliasResponse = await app.inject({
+    const defaultAliasResponse = await injectAsAdmin({
       method: "GET",
       url: "/api/v1/rule-sets?default=true&page=1&pageSize=20"
     });
@@ -326,7 +345,7 @@ describe("API - rules, matches, summaries", () => {
     expect(defaultAliasResponse.json().data.length).toBeGreaterThan(0);
     expect(defaultAliasResponse.json().data.every((item: { isDefault: boolean }) => item.isDefault === true)).toBe(true);
 
-    const modulesResponse = await app.inject({
+    const modulesResponse = await injectAsAdmin({
       method: "GET",
       url: "/api/v1/rule-sets?modules=GROUP_FUND&page=1&pageSize=20"
     });
@@ -334,7 +353,7 @@ describe("API - rules, matches, summaries", () => {
     expect(modulesResponse.json().data.length).toBeGreaterThan(0);
     expect(modulesResponse.json().data.every((item: { module: string }) => item.module === "GROUP_FUND")).toBe(true);
 
-    const searchResponse = await app.inject({
+    const searchResponse = await injectAsAdmin({
       method: "GET",
       url: "/api/v1/rule-sets?search=Alpha&page=1&pageSize=20"
     });
@@ -342,7 +361,7 @@ describe("API - rules, matches, summaries", () => {
     expect(searchResponse.json().data.length).toBeGreaterThan(0);
     expect(searchResponse.json().data.every((item: { name: string }) => item.name.toLowerCase().includes("alpha"))).toBe(true);
 
-    const dateResponse = await app.inject({
+    const dateResponse = await injectAsAdmin({
       method: "GET",
       url: "/api/v1/rule-sets?from=2100-01-01T00:00:00.000Z&page=1&pageSize=20"
     });
@@ -353,6 +372,7 @@ describe("API - rules, matches, summaries", () => {
 
   it("validates match creation and supports create/detail/preset/summaries", async () => {
     app = await createApp(createMockServices());
+    adminHeaders = await loginAndGetAuthHeaders(app);
 
     const duplicatePlayerPayload = {
       module: "MATCH_STAKES",
@@ -365,7 +385,7 @@ describe("API - rules, matches, summaries", () => {
       ]
     };
 
-    const duplicatePlayerResponse = await app.inject({
+    const duplicatePlayerResponse = await injectAsAdmin({
       method: "POST",
       url: "/api/v1/matches",
       payload: duplicatePlayerPayload
@@ -373,7 +393,7 @@ describe("API - rules, matches, summaries", () => {
 
     expect(duplicatePlayerResponse.statusCode).toBe(400);
 
-    const duplicatePlacementResponse = await app.inject({
+    const duplicatePlacementResponse = await injectAsAdmin({
       method: "POST",
       url: "/api/v1/matches",
       payload: {
@@ -388,7 +408,7 @@ describe("API - rules, matches, summaries", () => {
 
     expect(duplicatePlacementResponse.statusCode).toBe(400);
 
-    const createResponse = await app.inject({
+    const createResponse = await injectAsAdmin({
       method: "POST",
       url: "/api/v1/matches",
       payload: {
@@ -406,11 +426,11 @@ describe("API - rules, matches, summaries", () => {
     expect(createResponse.statusCode).toBe(201);
     const createdMatch = createResponse.json().data;
 
-    const detailResponse = await app.inject({ method: "GET", url: `/api/v1/matches/${createdMatch.id}` });
+    const detailResponse = await injectAsAdmin({ method: "GET", url: `/api/v1/matches/${createdMatch.id}` });
     expect(detailResponse.statusCode).toBe(200);
     expect(detailResponse.json().data.id).toBe(createdMatch.id);
 
-    const presetResponse = await app.inject({
+    const presetResponse = await injectAsAdmin({
       method: "GET",
       url: "/api/v1/recent-match-presets/MATCH_STAKES"
     });
@@ -418,19 +438,19 @@ describe("API - rules, matches, summaries", () => {
     expect(presetResponse.statusCode).toBe(200);
     expect(presetResponse.json().data.lastSelectedPlayerIds.length).toBe(3);
 
-    const summaryResponse = await app.inject({ method: "GET", url: "/api/v1/match-stakes/summary" });
+    const summaryResponse = await injectAsAdmin({ method: "GET", url: "/api/v1/match-stakes/summary" });
     expect(summaryResponse.statusCode).toBe(200);
 
-    const ledgerResponse = await app.inject({ method: "GET", url: "/api/v1/match-stakes/ledger?page=1&pageSize=20" });
+    const ledgerResponse = await injectAsAdmin({ method: "GET", url: "/api/v1/match-stakes/ledger?page=1&pageSize=20" });
     expect(ledgerResponse.statusCode).toBe(200);
 
-    const historyResponse = await app.inject({ method: "GET", url: "/api/v1/match-stakes/matches?page=1&pageSize=20" });
+    const historyResponse = await injectAsAdmin({ method: "GET", url: "/api/v1/match-stakes/matches?page=1&pageSize=20" });
     expect(historyResponse.statusCode).toBe(200);
 
-    const groupFundSummaryResponse = await app.inject({ method: "GET", url: "/api/v1/group-fund/summary" });
+    const groupFundSummaryResponse = await injectAsAdmin({ method: "GET", url: "/api/v1/group-fund/summary" });
     expect(groupFundSummaryResponse.statusCode).toBe(200);
 
-    const createManualGroupFundTransactionResponse = await app.inject({
+    const createManualGroupFundTransactionResponse = await injectAsAdmin({
       method: "POST",
       url: "/api/v1/group-fund/transactions",
       payload: {
@@ -442,27 +462,28 @@ describe("API - rules, matches, summaries", () => {
     });
     expect(createManualGroupFundTransactionResponse.statusCode).toBe(201);
 
-    const listManualGroupFundTransactionsResponse = await app.inject({
+    const listManualGroupFundTransactionsResponse = await injectAsAdmin({
       method: "GET",
       url: "/api/v1/group-fund/transactions?page=1&pageSize=20"
     });
     expect(listManualGroupFundTransactionsResponse.statusCode).toBe(200);
     expect(listManualGroupFundTransactionsResponse.json().data.length).toBeGreaterThanOrEqual(1);
 
-    const groupFundLedgerResponse = await app.inject({ method: "GET", url: "/api/v1/group-fund/ledger?page=1&pageSize=20" });
+    const groupFundLedgerResponse = await injectAsAdmin({ method: "GET", url: "/api/v1/group-fund/ledger?page=1&pageSize=20" });
     expect(groupFundLedgerResponse.statusCode).toBe(200);
 
-    const groupFundMatchesResponse = await app.inject({ method: "GET", url: "/api/v1/group-fund/matches?page=1&pageSize=20" });
+    const groupFundMatchesResponse = await injectAsAdmin({ method: "GET", url: "/api/v1/group-fund/matches?page=1&pageSize=20" });
     expect(groupFundMatchesResponse.statusCode).toBe(200);
 
-    const dashboardResponse = await app.inject({ method: "GET", url: "/api/v1/dashboard/overview" });
+    const dashboardResponse = await injectAsAdmin({ method: "GET", url: "/api/v1/dashboard/overview" });
     expect(dashboardResponse.statusCode).toBe(200);
   });
 
   it("supports debt-period-based match-stakes endpoints", async () => {
     app = await createApp(createMockServices());
+    adminHeaders = await loginAndGetAuthHeaders(app);
 
-    const createMatchResponse = await app.inject({
+    const createMatchResponse = await injectAsAdmin({
       method: "POST",
       url: "/api/v1/matches",
       payload: {
@@ -479,27 +500,27 @@ describe("API - rules, matches, summaries", () => {
     expect(createMatchResponse.statusCode).toBe(201);
     const createdMatch = createMatchResponse.json().data;
 
-    const currentPeriodResponse = await app.inject({
+    const currentPeriodResponse = await injectAsAdmin({
       method: "GET",
       url: "/api/v1/match-stakes/debt-periods/current"
     });
     expect(currentPeriodResponse.statusCode).toBe(200);
     const currentPeriod = currentPeriodResponse.json().data.period;
 
-    const listPeriodsResponse = await app.inject({
+    const listPeriodsResponse = await injectAsAdmin({
       method: "GET",
       url: "/api/v1/match-stakes/debt-periods?page=1&pageSize=20"
     });
     expect(listPeriodsResponse.statusCode).toBe(200);
     expect(listPeriodsResponse.json().data.length).toBeGreaterThanOrEqual(1);
 
-    const detailResponse = await app.inject({
+    const detailResponse = await injectAsAdmin({
       method: "GET",
       url: `/api/v1/match-stakes/debt-periods/${currentPeriod.id}`
     });
     expect(detailResponse.statusCode).toBe(200);
 
-    const timelineResponse = await app.inject({
+    const timelineResponse = await injectAsAdmin({
       method: "GET",
       url: `/api/v1/match-stakes/debt-periods/${currentPeriod.id}/timeline`
     });
@@ -509,14 +530,14 @@ describe("API - rules, matches, summaries", () => {
     expect(timelineResponse.json().data.timeline.length).toBeGreaterThanOrEqual(2);
     expect(timelineResponse.json().data.timeline.at(-1).type).toBe("INITIAL");
 
-    const timelineWithoutInitialResponse = await app.inject({
+    const timelineWithoutInitialResponse = await injectAsAdmin({
       method: "GET",
       url: `/api/v1/match-stakes/debt-periods/${currentPeriod.id}/timeline?includeInitialSnapshot=false`
     });
     expect(timelineWithoutInitialResponse.statusCode).toBe(200);
     expect(timelineWithoutInitialResponse.json().data.timeline.every((item: { type: string }) => item.type === "MATCH")).toBe(true);
 
-    const createFirstSettlementResponse = await app.inject({
+    const createFirstSettlementResponse = await injectAsAdmin({
       method: "POST",
       url: `/api/v1/match-stakes/debt-periods/${currentPeriod.id}/settlements`,
       payload: {
@@ -531,7 +552,7 @@ describe("API - rules, matches, summaries", () => {
     });
     expect(createFirstSettlementResponse.statusCode).toBe(201);
 
-    const closeResponse = await app.inject({
+    const closeResponse = await injectAsAdmin({
       method: "POST",
       url: `/api/v1/match-stakes/debt-periods/${currentPeriod.id}/close`,
       payload: {
@@ -546,14 +567,14 @@ describe("API - rules, matches, summaries", () => {
     expect(closeResponse.json().data.status).toBe("CLOSED");
     expect(closeResponse.json().data.nextPeriod.status).toBe("OPEN");
 
-    const createNewPeriodResponse = await app.inject({
+    const createNewPeriodResponse = await injectAsAdmin({
       method: "POST",
       url: "/api/v1/match-stakes/debt-periods",
       payload: { title: "New cycle" }
     });
     expect(createNewPeriodResponse.statusCode).toBe(409);
 
-    const moduleMatchesResponse = await app.inject({
+    const moduleMatchesResponse = await injectAsAdmin({
       method: "GET",
       url: `/api/v1/match-stakes/matches?page=1&pageSize=20&periodId=${currentPeriod.id}`
     });
@@ -562,7 +583,7 @@ describe("API - rules, matches, summaries", () => {
     expect(moduleMatchesResponse.json().data[0].debtPeriodNo).toBe(1);
     expect(moduleMatchesResponse.json().data[0].periodMatchNo).toBe(1);
 
-    const matchDetailResponse = await app.inject({
+    const matchDetailResponse = await injectAsAdmin({
       method: "GET",
       url: `/api/v1/matches/${createdMatch.id}`
     });
@@ -571,3 +592,5 @@ describe("API - rules, matches, summaries", () => {
     expect(matchDetailResponse.json().data.periodMatchNo).toBe(1);
   });
 });
+
+

@@ -1,15 +1,32 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { createMockServices } from "./helpers/mock-services.js";
+import { loginAndGetAuthHeaders } from "./helpers/auth.js";
 
 describe("API - health, players, presets", () => {
   let app: Awaited<ReturnType<typeof createApp>> | null = null;
+  let adminHeaders: Record<string, string> = {};
+
+  async function injectAsAdmin(options: any): Promise<any> {
+    if (!app) {
+      throw new Error("App is not initialized");
+    }
+
+    return app.inject({
+      ...options,
+      headers: {
+        ...(options.headers ?? {}),
+        ...adminHeaders
+      }
+    });
+  }
 
   afterEach(async () => {
     if (app) {
       await app.close();
       app = null;
     }
+    adminHeaders = {};
   });
 
   it("returns health payload", async () => {
@@ -26,8 +43,9 @@ describe("API - health, players, presets", () => {
 
   it("returns CORS header for cross-origin requests", async () => {
     app = await createApp(createMockServices());
+    adminHeaders = await loginAndGetAuthHeaders(app);
 
-    const response = await app.inject({
+    const response = await injectAsAdmin({
       method: "GET",
       url: "/api/v1/players?page=1&pageSize=12&isActive=true",
       headers: {
@@ -41,11 +59,12 @@ describe("API - health, players, presets", () => {
 
   it("supports player CRUD flow", async () => {
     app = await createApp(createMockServices());
+    adminHeaders = await loginAndGetAuthHeaders(app);
 
-    const listBefore = await app.inject({ method: "GET", url: "/api/v1/players?page=1&pageSize=20" });
+    const listBefore = await injectAsAdmin({ method: "GET", url: "/api/v1/players?page=1&pageSize=20" });
     expect(listBefore.statusCode).toBe(200);
 
-    const createResponse = await app.inject({
+    const createResponse = await injectAsAdmin({
       method: "POST",
       url: "/api/v1/players",
       payload: {
@@ -59,10 +78,10 @@ describe("API - health, players, presets", () => {
     const created = createResponse.json().data;
     expect(created.displayName).toBe("Eve");
 
-    const detailResponse = await app.inject({ method: "GET", url: `/api/v1/players/${created.id}` });
+    const detailResponse = await injectAsAdmin({ method: "GET", url: `/api/v1/players/${created.id}` });
     expect(detailResponse.statusCode).toBe(200);
 
-    const patchResponse = await app.inject({
+    const patchResponse = await injectAsAdmin({
       method: "PATCH",
       url: `/api/v1/players/${created.id}`,
       payload: {
@@ -72,22 +91,23 @@ describe("API - health, players, presets", () => {
     expect(patchResponse.statusCode).toBe(200);
     expect(patchResponse.json().data.displayName).toBe("Eve Updated");
 
-    const deleteResponse = await app.inject({ method: "DELETE", url: `/api/v1/players/${created.id}` });
+    const deleteResponse = await injectAsAdmin({ method: "DELETE", url: `/api/v1/players/${created.id}` });
     expect(deleteResponse.statusCode).toBe(200);
     expect(deleteResponse.json().data.isActive).toBe(false);
   });
 
   it("supports preset get and put", async () => {
     app = await createApp(createMockServices());
+    adminHeaders = await loginAndGetAuthHeaders(app);
 
-    const before = await app.inject({
+    const before = await injectAsAdmin({
       method: "GET",
       url: "/api/v1/recent-match-presets/MATCH_STAKES"
     });
 
     expect(before.statusCode).toBe(200);
 
-    const updated = await app.inject({
+    const updated = await injectAsAdmin({
       method: "PUT",
       url: "/api/v1/recent-match-presets/MATCH_STAKES",
       payload: {

@@ -7,16 +7,33 @@ This guide is written from the current source code in `apps/api` and describes:
 - Business purpose.
 - Processing flow and key validation logic.
 
+For detailed auth sequence examples, see `docs/auth_flow_en.md`.
+
 ## 1. System Overview
 
 - Runtime: Node.js + TypeScript + Fastify.
 - Base API prefix: `/api/v1`.
 - Swagger UI: `GET /docs`.
 - OpenAPI JSON: `GET /docs/json`.
+- Authentication: JWT Bearer token.
 - Health routes:
   - `GET /` (service readiness quick check).
   - `GET /api/v1/health`.
 - Data scope: all endpoints run under one default group resolved at startup by `DEFAULT_GROUP_CODE` (no group id in API requests).
+
+### Authentication & authorization at a glance
+
+- Public routes:
+  - `GET /`
+  - `GET /api/v1/health`
+  - `POST /api/v1/auth/login`
+- All other `/api/v1/**` routes require `Authorization: Bearer <accessToken>`.
+- Roles:
+  - `USER`: read-only (`GET`/`HEAD`).
+  - `ADMIN`: full access (`GET/POST/PUT/PATCH/DELETE`).
+- Login is intentionally internal/simple:
+  - `accessCode === "admin123"` => `ADMIN` token.
+  - Any other non-empty `accessCode` => `USER` token.
 
 ### Startup lifecycle
 
@@ -59,6 +76,8 @@ interface ApiErrorResponse {
 - `200` success.
 - `201` created.
 - `400` validation or bad request.
+- `401` unauthorized (missing/invalid/expired token).
+- `403` forbidden (role is not allowed for the HTTP method).
 - `404` not found.
 - `409` conflict.
 - `422` business rule violation.
@@ -108,7 +127,45 @@ type MatchStakesPenaltyDestinationSelectorType =
   | "MATCH_WINNER"
   | "FIXED_PLAYER"
   | "FUND_ACCOUNT";
+
+type RoleCode = "ADMIN" | "USER";
 ```
+
+### 2.6 Authentication conventions
+
+Login endpoint:
+
+- `POST /api/v1/auth/login`
+
+Request DTO:
+
+```ts
+interface LoginRequest {
+  accessCode: string;
+}
+```
+
+Response DTO:
+
+```ts
+ApiSuccessResponse<{
+  accessToken: string;
+  tokenType: "Bearer";
+  expiresIn: number; // seconds
+  role: "ADMIN" | "USER";
+}>;
+```
+
+Authorization header format:
+
+```http
+Authorization: Bearer <accessToken>
+```
+
+Authorization rules by HTTP method:
+
+- `GET`/`HEAD`: `USER` or `ADMIN`.
+- `POST`/`PUT`/`PATCH`/`DELETE`: `ADMIN` only.
 
 ## 3. Endpoint Catalog
 
@@ -116,6 +173,7 @@ type MatchStakesPenaltyDestinationSelectorType =
 | --- | --- | --- |
 | GET | `/` | Service ready check |
 | GET | `/api/v1/health` | Health status |
+| POST | `/api/v1/auth/login` | Login and issue JWT |
 | GET | `/api/v1/players` | List players |
 | POST | `/api/v1/players` | Create player |
 | GET | `/api/v1/players/:playerId` | Player detail |
@@ -251,6 +309,46 @@ Processing flow:
 
 1. Build current ISO timestamp.
 2. Return health payload.
+
+## 5.1.1 Auth API
+
+### POST `/api/v1/auth/login`
+
+Business purpose: issue access token for internal use.
+
+Request DTO:
+
+```ts
+interface LoginRequest {
+  accessCode: string;
+}
+```
+
+Response DTO:
+
+```ts
+ApiSuccessResponse<{
+  accessToken: string;
+  tokenType: "Bearer";
+  expiresIn: number;
+  role: "ADMIN" | "USER";
+}>;
+```
+
+Processing flow:
+
+1. Validate `accessCode` non-empty.
+2. Resolve role code:
+   - `admin123` => `ADMIN`
+   - otherwise => `USER`
+3. Load role metadata from `roles` table.
+4. Issue signed JWT containing `roleId`, `roleCode`, `iat`, `exp`.
+5. Return token payload.
+
+Main errors:
+
+- `400 AUTH_LOGIN_INVALID` when `accessCode` is empty.
+- `500 AUTH_ROLE_NOT_CONFIGURED` when role rows are missing in DB.
 
 ## 5.2 Player APIs
 
@@ -1802,6 +1900,10 @@ Processing flow:
 | --- | --- |
 | `VALIDATION_ERROR` | Zod validation failed |
 | `INTERNAL_ERROR` | Unhandled server error |
+| `AUTH_LOGIN_INVALID` | Login payload invalid (`accessCode` empty) |
+| `AUTH_UNAUTHORIZED` | Missing/invalid/expired bearer token |
+| `AUTH_FORBIDDEN` | Authenticated but role does not allow the HTTP method |
+| `AUTH_ROLE_NOT_CONFIGURED` | Role metadata not found in `roles` table |
 | `GROUP_NOT_FOUND` | Default group code not found at startup |
 | `PLAYER_DUPLICATE` | Player slug conflict |
 | `PLAYER_NOT_FOUND` | Player not found in active group membership |

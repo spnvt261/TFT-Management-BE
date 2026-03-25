@@ -30,7 +30,10 @@ const envSchema = z.object({
     .optional()
     .transform((value) => value !== "false"),
   FLYWAY_COMMAND: z.string().default("flyway"),
-  FLYWAY_LOCATIONS: z.string().optional()
+  FLYWAY_LOCATIONS: z.string().optional(),
+
+  JWT_SECRET: z.string().default("tft2-internal-jwt-secret"),
+  JWT_EXPIRES_IN: z.string().default("24h")
 });
 
 const parsed = envSchema.parse(process.env);
@@ -57,6 +60,10 @@ export const env = {
     enabled: parsed.FLYWAY_ENABLED,
     command: parsed.FLYWAY_COMMAND,
     locations: parsed.FLYWAY_LOCATIONS
+  },
+  auth: {
+    jwtSecret: parsed.JWT_SECRET,
+    jwtExpiresIn: parsed.JWT_EXPIRES_IN
   }
 };
 

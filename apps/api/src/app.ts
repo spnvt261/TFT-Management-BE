@@ -14,6 +14,10 @@ import { registerMatchStakesRoutes } from "./modules/match-stakes/routes.js";
 import { registerGroupFundRoutes } from "./modules/group-fund/routes.js";
 import { registerDashboardRoutes } from "./modules/dashboard/routes.js";
 import { openApiTags } from "./core/docs/swagger.js";
+import { registerJwtPlugin } from "./modules/auth/jwt-plugin.js";
+import { createAuthPreHandler } from "./modules/auth/guard.js";
+import { registerAuthRoutes } from "./modules/auth/routes.js";
+import { AuthService } from "./modules/auth/auth-service.js";
 
 export async function createApp(services: AppServices) {
   const app = Fastify({
@@ -36,6 +40,16 @@ export async function createApp(services: AppServices) {
         description: "Backend API for TFT History Manager",
         version: "0.1.0"
       },
+      components: {
+        securitySchemes: {
+          BearerAuth: {
+            type: "http",
+            scheme: "bearer",
+            bearerFormat: "JWT"
+          }
+        }
+      },
+      security: [{ BearerAuth: [] }],
       tags: openApiTags
     }
   });
@@ -49,8 +63,19 @@ export async function createApp(services: AppServices) {
     data: { service: "tft-history-api", status: "ready" }
   }));
 
+  await registerJwtPlugin(app);
+
+  if (!app.hasRequestDecorator("authUser")) {
+    app.decorateRequest("authUser", null);
+  }
+
+  app.addHook("preHandler", createAuthPreHandler(app.jwtAuth));
+
   await app.register(async (api) => {
+    const authService = new AuthService(services.repositories, api.jwtAuth);
+
     await registerSystemRoutes(api);
+    await registerAuthRoutes(api, authService);
     await registerPlayerRoutes(api, services);
     await registerRuleRoutes(api, services);
     await registerMatchRoutes(api, services);

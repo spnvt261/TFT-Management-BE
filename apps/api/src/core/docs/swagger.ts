@@ -34,6 +34,8 @@ export function successResponseSchema(dataSchema: z.ZodTypeAny, metaSchema?: z.Z
 
 export const errorResponseSchemas: Record<number, Record<string, unknown>> = {
   400: toSwaggerSchema(apiErrorSchema),
+  401: toSwaggerSchema(apiErrorSchema),
+  403: toSwaggerSchema(apiErrorSchema),
   404: toSwaggerSchema(apiErrorSchema),
   409: toSwaggerSchema(apiErrorSchema),
   422: toSwaggerSchema(apiErrorSchema),
@@ -41,6 +43,7 @@ export const errorResponseSchemas: Record<number, Record<string, unknown>> = {
 };
 
 export const openApiTags = [
+  { name: "Auth", description: "Authentication" },
   { name: "System", description: "System endpoints" },
   { name: "Players", description: "Player management" },
   { name: "Rules", description: "Rule management with internal immutable versioning" },

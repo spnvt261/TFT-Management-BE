@@ -9,10 +9,12 @@ import { PresetRepository } from "./preset-repository.js";
 import { AuditRepository } from "./audit-repository.js";
 import { AccountRepository } from "./account-repository.js";
 import { MatchStakesDebtRepository } from "./match-stakes-debt-repository.js";
+import { RoleRepository } from "./role-repository.js";
 
 export function createRepositories(db: Queryable) {
   return {
     groups: new GroupRepository(db),
+    roles: new RoleRepository(db),
     players: new PlayerRepository(db),
     rules: new RuleRepository(db),
     matches: new MatchRepository(db),

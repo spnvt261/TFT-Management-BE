@@ -568,7 +568,33 @@ export function createMockServices(): AppServices {
   };
 
   const services: AppServices = {
-    repositories: {} as any,
+    repositories: {
+      roles: {
+        findByCode: async (code: string) => {
+          if (code === "ADMIN") {
+            return {
+              id: "90000000-0000-4000-8000-000000000001",
+              code: "ADMIN",
+              name: "Administrator",
+              createdAt: now,
+              updatedAt: now
+            };
+          }
+
+          if (code === "USER") {
+            return {
+              id: "90000000-0000-4000-8000-000000000002",
+              code: "USER",
+              name: "User",
+              createdAt: now,
+              updatedAt: now
+            };
+          }
+
+          return null;
+        }
+      }
+    } as any,
     groupId: "group-1",
     players: {
       list: async ({ isActive, search, page, pageSize }) => {
