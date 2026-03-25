@@ -15,6 +15,7 @@ export interface MatchInsertInput {
   ruleSetId: string;
   ruleSetVersionId: string;
   debtPeriodId: string | null;
+  periodMatchNo: number | null;
   playedAt: string;
   participantCount: number;
   status: MatchStatus;
@@ -31,6 +32,7 @@ export interface MatchDetailRow {
   rule_set_version_no?: number;
   debt_period_id: string | null;
   debt_period_no?: number | null;
+  period_match_no?: number | null;
   played_at: string;
   participant_count: number;
   status: MatchStatus;
@@ -62,10 +64,10 @@ export class MatchRepository {
     const result = await this.db.query<{ id: string }>(
       `
       INSERT INTO matches(
-        group_id, module, rule_set_id, rule_set_version_id, debt_period_id, played_at, participant_count,
+        group_id, module, rule_set_id, rule_set_version_id, debt_period_id, period_match_no, played_at, participant_count,
         status, input_snapshot_json, calculation_snapshot_json
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING id
       `,
       [
@@ -74,6 +76,7 @@ export class MatchRepository {
         input.ruleSetId,
         input.ruleSetVersionId,
         input.debtPeriodId,
+        input.periodMatchNo,
         input.playedAt,
         input.participantCount,
         input.status,
@@ -83,6 +86,29 @@ export class MatchRepository {
     );
 
     return { id: result.rows[0]!.id };
+  }
+
+  public async reserveNextPeriodMatchNo(debtPeriodId: string): Promise<number> {
+    await this.db.query(
+      `
+      SELECT id
+      FROM match_stakes_debt_periods
+      WHERE id = $1
+      FOR UPDATE
+      `,
+      [debtPeriodId]
+    );
+
+    const result = await this.db.query<{ next_period_match_no: number }>(
+      `
+      SELECT COALESCE(MAX(period_match_no), 0)::int + 1 AS next_period_match_no
+      FROM matches
+      WHERE debt_period_id = $1
+      `,
+      [debtPeriodId]
+    );
+
+    return result.rows[0]?.next_period_match_no ?? 1;
   }
 
   public async insertParticipants(matchId: string, participants: MatchParticipantInsert[]): Promise<void> {
@@ -121,6 +147,7 @@ export class MatchRepository {
     const result = await this.db.query<MatchDetailRow>(
       `
       SELECT m.id, m.group_id, m.module, m.rule_set_id, m.rule_set_version_id, m.debt_period_id, dp.period_no AS debt_period_no,
+             m.period_match_no,
              m.played_at, m.participant_count, m.status,
              m.void_reason, m.voided_at, m.input_snapshot_json, m.calculation_snapshot_json, m.created_at, m.updated_at
       FROM matches m
@@ -185,7 +212,7 @@ export class MatchRepository {
     const result = await this.db.query<MatchDetailRow>(
       `
       SELECT m.id, m.group_id, m.module, m.rule_set_id, m.rule_set_version_id, rsv.version_no AS rule_set_version_no,
-             m.debt_period_id, dp.period_no AS debt_period_no,
+             m.debt_period_id, dp.period_no AS debt_period_no, m.period_match_no,
              m.played_at, m.participant_count, m.status, m.void_reason, m.voided_at, m.created_at, m.updated_at
       FROM matches m
       INNER JOIN rule_set_versions rsv ON rsv.id = m.rule_set_version_id

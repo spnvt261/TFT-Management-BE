@@ -43,6 +43,7 @@ interface MatchRecord {
   status: "POSTED" | "VOIDED";
   debtPeriodId: string | null;
   debtPeriodNo: number | null;
+  periodMatchNo: number | null;
 }
 
 interface ManualGroupFundTransaction {
@@ -62,6 +63,8 @@ interface MatchStakesDebtPeriodRecord {
   periodNo: number;
   title: string | null;
   note: string | null;
+  closeNote: string | null;
+  nextPeriodId: string | null;
   status: "OPEN" | "CLOSED";
   openedAt: string;
   closedAt: string | null;
@@ -106,6 +109,7 @@ export function createMockServices(): AppServices {
   const manualGroupFundTransactions: ManualGroupFundTransaction[] = [];
   const debtPeriods: MatchStakesDebtPeriodRecord[] = [];
   const debtSettlementsByPeriod = new Map<string, MatchStakesDebtSettlementRecord[]>();
+  const debtPeriodInitBalances = new Map<string, Map<string, number>>();
   const builderValidationService = new MatchStakesBuilderValidationService();
   const builderCompileService = new MatchStakesBuilderCompileService();
 
@@ -249,11 +253,14 @@ export function createMockServices(): AppServices {
       periodNo: maxPeriodNo + 1,
       title: input.title ?? null,
       note: input.note ?? null,
+      closeNote: null,
+      nextPeriodId: null,
       status: "OPEN",
       openedAt: new Date().toISOString(),
       closedAt: null
     };
     debtPeriods.unshift(created);
+    debtPeriodInitBalances.set(created.id, new Map());
     return created;
   };
 
@@ -288,6 +295,7 @@ export function createMockServices(): AppServices {
       (match) => match.module === "MATCH_STAKES" && match.debtPeriodId === periodId && match.status !== "VOIDED"
     );
     const settlements = debtSettlementsByPeriod.get(periodId) ?? [];
+    const initBalances = debtPeriodInitBalances.get(periodId) ?? new Map<string, number>();
 
     const playerSummaryMap = new Map<
       string,
@@ -295,6 +303,7 @@ export function createMockServices(): AppServices {
         playerId: string;
         playerName: string;
         totalMatches: number;
+        initNetVnd: number;
         accruedNetVnd: number;
         settledPaidVnd: number;
         settledReceivedVnd: number;
@@ -310,6 +319,7 @@ export function createMockServices(): AppServices {
         playerId,
         playerName: players.get(playerId)?.displayName ?? playerId,
         totalMatches: 0,
+        initNetVnd: initBalances.get(playerId) ?? 0,
         accruedNetVnd: 0,
         settledPaidVnd: 0,
         settledReceivedVnd: 0
@@ -317,6 +327,17 @@ export function createMockServices(): AppServices {
       playerSummaryMap.set(playerId, created);
       return created;
     };
+
+    for (const activePlayer of players.values()) {
+      if (activePlayer.isActive) {
+        ensurePlayer(activePlayer.id);
+      }
+    }
+
+    for (const [playerId, initNetVnd] of initBalances.entries()) {
+      const player = ensurePlayer(playerId);
+      player.initNetVnd = initNetVnd;
+    }
 
     for (const match of scopedMatches) {
       const netByPlayer = computeMatchStakesNets(match);
@@ -342,7 +363,7 @@ export function createMockServices(): AppServices {
 
     const playersSummary = Array.from(playerSummaryMap.values()).map((player) => ({
       ...player,
-      outstandingNetVnd: player.accruedNetVnd - player.settledReceivedVnd + player.settledPaidVnd
+      outstandingNetVnd: player.initNetVnd + player.accruedNetVnd - player.settledReceivedVnd + player.settledPaidVnd
     }));
 
     const summary = {
@@ -377,7 +398,8 @@ export function createMockServices(): AppServices {
       playerId: item.playerId,
       playerName: item.playerName
     }));
-    const cumulativeByPlayer = new Map(playerScope.map((item) => [item.playerId, 0]));
+    const initByPlayer = new Map(computed.players.map((item) => [item.playerId, item.initNetVnd]));
+    const cumulativeByPlayer = new Map(playerScope.map((item) => [item.playerId, initByPlayer.get(item.playerId) ?? 0]));
 
     const timelineAscending = scopedMatches.map((match, index) => {
       const sortedParticipants = [...match.participants].sort((left, right) => left.tftPlacement - right.tftPlacement);
@@ -425,7 +447,7 @@ export function createMockServices(): AppServices {
         type: "MATCH" as const,
         matchId: match.id,
         playedAt: match.playedAt,
-        matchNo: index + 1,
+        matchNo: match.periodMatchNo ?? index + 1,
         participantCount: match.participantCount,
         status: match.status,
         rows
@@ -447,8 +469,8 @@ export function createMockServices(): AppServices {
             playerName: player.playerName,
             tftPlacement: null,
             relativeRank: null,
-            matchNetVnd: 0,
-            cumulativeNetVnd: 0
+            matchNetVnd: initByPlayer.get(player.playerId) ?? 0,
+            cumulativeNetVnd: initByPlayer.get(player.playerId) ?? 0
           }))
           .sort((left, right) => {
             const byName = left.playerName.localeCompare(right.playerName);
@@ -914,6 +936,12 @@ export function createMockServices(): AppServices {
         const overrideReason = input.confirmation?.overrideReason ?? null;
         const manualAdjusted = confirmationMode === "MANUAL_ADJUSTED";
         const debtPeriod = input.module === "MATCH_STAKES" ? getOrCreateOpenDebtPeriod() : null;
+        const periodMatchNo =
+          debtPeriod && input.module === "MATCH_STAKES"
+            ? Array.from(matches.values())
+                .filter((item) => item.module === "MATCH_STAKES" && item.debtPeriodId === debtPeriod.id)
+                .reduce((max, item) => Math.max(max, item.periodMatchNo ?? 0), 0) + 1
+            : null;
 
         const record: MatchRecord = {
           id,
@@ -928,7 +956,8 @@ export function createMockServices(): AppServices {
           manualAdjusted,
           status: "POSTED",
           debtPeriodId: debtPeriod?.id ?? null,
-          debtPeriodNo: debtPeriod?.periodNo ?? null
+          debtPeriodNo: debtPeriod?.periodNo ?? null,
+          periodMatchNo
         };
 
         matches.set(id, record);
@@ -949,6 +978,7 @@ export function createMockServices(): AppServices {
           status: "POSTED",
           debtPeriodId: record.debtPeriodId,
           debtPeriodNo: record.debtPeriodNo,
+          periodMatchNo: record.periodMatchNo,
           confirmationMode,
           overrideReason,
           manualAdjusted,
@@ -1024,6 +1054,7 @@ export function createMockServices(): AppServices {
           note: null,
           debtPeriodId: item.debtPeriodId,
           debtPeriodNo: item.debtPeriodNo,
+          periodMatchNo: item.periodMatchNo,
           confirmationMode: item.confirmationMode,
           overrideReason: item.overrideReason,
           manualAdjusted: item.manualAdjusted,
@@ -1145,7 +1176,8 @@ export function createMockServices(): AppServices {
             participantCount: match.participantCount,
             status: match.status,
             debtPeriodId: match.debtPeriodId,
-            debtPeriodNo: match.debtPeriodNo
+            debtPeriodNo: match.debtPeriodNo,
+            periodMatchNo: match.periodMatchNo
           }));
 
         return {
@@ -1247,19 +1279,61 @@ export function createMockServices(): AppServices {
         if (period.status !== "OPEN") {
           throw new AppError(422, "DEBT_PERIOD_NOT_OPEN", "Debt period is not open");
         }
+
         const computed = buildDebtPeriodSummary(period.id);
-        if (computed.players.some((player) => player.outstandingNetVnd !== 0)) {
-          throw new AppError(422, "DEBT_PERIOD_OUTSTANDING_NOT_ZERO", "Debt period cannot be closed while outstanding remains");
+        const submittedBalances = Array.isArray(input?.closingBalances) ? input.closingBalances : [];
+        const seen = new Set<string>();
+        for (const item of submittedBalances) {
+          if (seen.has(item.playerId)) {
+            throw new AppError(400, "DEBT_PERIOD_CLOSING_BALANCE_INVALID", "closingBalances contains duplicate playerId");
+          }
+          seen.add(item.playerId);
         }
+
+        const playerById = new Map(computed.players.map((item) => [item.playerId, item]));
+        for (const item of submittedBalances) {
+          if (!playerById.has(item.playerId)) {
+            throw new AppError(400, "DEBT_PERIOD_CLOSING_BALANCE_INVALID", "closingBalances contains invalid playerId");
+          }
+        }
+
+        const normalizedByPlayer = new Map(computed.players.map((item) => [item.playerId, 0]));
+        for (const item of submittedBalances) {
+          normalizedByPlayer.set(item.playerId, item.netVnd);
+        }
+
+        const carryForwardBalances = computed.players.map((item) => ({
+          playerId: item.playerId,
+          playerName: item.playerName,
+          netVnd: normalizedByPlayer.get(item.playerId) ?? 0
+        }));
+        const totalClosingNetVnd = carryForwardBalances.reduce((sum, item) => sum + item.netVnd, 0);
+        if (totalClosingNetVnd !== 0) {
+          throw new AppError(422, "DEBT_PERIOD_CLOSING_BALANCE_INVALID", "closingBalances must net to zero");
+        }
+
         period.status = "CLOSED";
         period.closedAt = new Date().toISOString();
         if (input?.note) {
-          period.note = input.note;
+          period.closeNote = input.note;
         }
+
+        const nextPeriod = createDebtPeriod({});
+        period.nextPeriodId = nextPeriod.id;
+        const nextInit = new Map<string, number>();
+        for (const balance of carryForwardBalances) {
+          if (balance.netVnd !== 0) {
+            nextInit.set(balance.playerId, balance.netVnd);
+          }
+        }
+        debtPeriodInitBalances.set(nextPeriod.id, nextInit);
+
         return {
           id: period.id,
           status: "CLOSED",
-          closedAt: period.closedAt
+          closedAt: period.closedAt,
+          nextPeriod,
+          carryForwardBalances
         };
       },
       getLedger: async ({ page, pageSize }) => ({

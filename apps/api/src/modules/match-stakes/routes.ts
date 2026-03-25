@@ -47,9 +47,29 @@ const createSettlementBodySchema = z.object({
   });
 });
 
-const closeDebtPeriodBodySchema = z.object({
-  note: z.string().max(4000).nullable().optional()
-});
+const closeDebtPeriodBodySchema = z
+  .object({
+    note: z.string().max(4000).nullable().optional(),
+    closingBalances: z.array(
+      z.object({
+        playerId: uuidSchema,
+        netVnd: z.coerce.number().int()
+      })
+    )
+  })
+  .superRefine((value, context) => {
+    const seen = new Set<string>();
+    value.closingBalances.forEach((item, index) => {
+      if (seen.has(item.playerId)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["closingBalances", index, "playerId"],
+          message: "playerId must be unique in closingBalances"
+        });
+      }
+      seen.add(item.playerId);
+    });
+  });
 
 const debtPeriodTimelineQuerySchema = z.object({
   includeInitialSnapshot: z
@@ -79,6 +99,8 @@ const debtPeriodSchema = z.object({
   periodNo: z.number().int().positive(),
   title: z.string().nullable(),
   note: z.string().nullable(),
+  closeNote: z.string().nullable(),
+  nextPeriodId: uuidSchema.nullable(),
   status: debtPeriodStatusSchema,
   openedAt: z.string(),
   closedAt: z.string().nullable()
@@ -88,6 +110,7 @@ const debtPeriodPlayerSummarySchema = z.object({
   playerId: uuidSchema,
   playerName: z.string(),
   totalMatches: z.number().int().nonnegative(),
+  initNetVnd: z.number().int(),
   accruedNetVnd: z.number().int(),
   settledPaidVnd: z.number().int().nonnegative(),
   settledReceivedVnd: z.number().int().nonnegative(),
@@ -146,7 +169,8 @@ const debtPeriodDetailResponseSchema = z.object({
       participantCount: z.number().int().positive(),
       status: z.string(),
       debtPeriodId: uuidSchema.nullable(),
-      debtPeriodNo: z.number().int().positive().nullable()
+      debtPeriodNo: z.number().int().positive().nullable(),
+      periodMatchNo: z.number().int().positive().nullable()
     })
   )
 });
@@ -186,7 +210,15 @@ const createSettlementResponseSchema = z.object({
 const closeDebtPeriodResponseSchema = z.object({
   id: uuidSchema,
   status: z.literal("CLOSED"),
-  closedAt: z.string().nullable()
+  closedAt: z.string().nullable(),
+  nextPeriod: debtPeriodSchema,
+  carryForwardBalances: z.array(
+    z.object({
+      playerId: uuidSchema,
+      playerName: z.string(),
+      netVnd: z.number().int()
+    })
+  )
 });
 
 const matchStakesSummarySchema = z.object({
@@ -242,6 +274,7 @@ const moduleMatchHistoryItemSchema = z.object({
   ruleSetVersionNo: z.number().int().positive(),
   debtPeriodId: uuidSchema.nullable(),
   debtPeriodNo: z.number().int().positive().nullable(),
+  periodMatchNo: z.number().int().positive().nullable(),
   notePreview: z.string().nullable(),
   status: z.string(),
   participants: z.array(matchParticipantResponseSchema),
@@ -390,7 +423,7 @@ export async function registerMatchStakesRoutes(app: FastifyInstance, services: 
     {
       schema: {
         tags: ["Match Stakes"],
-        summary: "Close an open debt period when outstanding balances are zero",
+        summary: "Close an open debt period and carry balances to the next period",
         params: toSwaggerSchema(periodIdParamSchema),
         body: toSwaggerSchema(closeDebtPeriodBodySchema),
         response: {

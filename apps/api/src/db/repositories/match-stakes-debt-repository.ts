@@ -8,6 +8,9 @@ function mapDebtPeriod(row: {
   period_no: number;
   title: string | null;
   note: string | null;
+  close_note: string | null;
+  closing_snapshot_json: unknown | null;
+  next_period_id: string | null;
   status: "OPEN" | "CLOSED";
   opened_at: string;
   closed_at: string | null;
@@ -20,6 +23,9 @@ function mapDebtPeriod(row: {
     periodNo: row.period_no,
     title: row.title,
     note: row.note,
+    closeNote: row.close_note,
+    closingSnapshotJson: row.closing_snapshot_json,
+    nextPeriodId: row.next_period_id,
     status: row.status,
     openedAt: row.opened_at,
     closedAt: row.closed_at,
@@ -36,9 +42,16 @@ export interface DebtPeriodPlayerAggregateRow {
   playerId: string;
   playerName: string;
   totalMatches: number;
+  initNetVnd: number;
   accruedNetVnd: number;
   settledPaidVnd: number;
   settledReceivedVnd: number;
+}
+
+export interface DebtPeriodInitBalanceRow {
+  playerId: string;
+  playerName: string;
+  initNetVnd: number;
 }
 
 export interface DebtSettlementLineInsertInput {
@@ -51,6 +64,7 @@ export interface DebtSettlementLineInsertInput {
 export interface DebtPeriodMatchTimelineRow {
   id: string;
   playedAt: string;
+  periodMatchNo: number | null;
   participantCount: number;
   status: string;
   createdAt: string;
@@ -75,6 +89,9 @@ export class MatchStakesDebtRepository {
       period_no: number;
       title: string | null;
       note: string | null;
+      close_note: string | null;
+      closing_snapshot_json: unknown | null;
+      next_period_id: string | null;
       status: "OPEN" | "CLOSED";
       opened_at: string;
       closed_at: string | null;
@@ -82,7 +99,9 @@ export class MatchStakesDebtRepository {
       updated_at: string;
     }>(
       `
-      SELECT id, group_id, period_no, title, note, status, opened_at, closed_at, created_at, updated_at
+      SELECT
+        id, group_id, period_no, title, note, close_note, closing_snapshot_json, next_period_id,
+        status, opened_at, closed_at, created_at, updated_at
       FROM match_stakes_debt_periods
       WHERE group_id = $1 AND status = 'OPEN'
       LIMIT 1
@@ -101,6 +120,9 @@ export class MatchStakesDebtRepository {
       period_no: number;
       title: string | null;
       note: string | null;
+      close_note: string | null;
+      closing_snapshot_json: unknown | null;
+      next_period_id: string | null;
       status: "OPEN" | "CLOSED";
       opened_at: string;
       closed_at: string | null;
@@ -108,7 +130,9 @@ export class MatchStakesDebtRepository {
       updated_at: string;
     }>(
       `
-      SELECT id, group_id, period_no, title, note, status, opened_at, closed_at, created_at, updated_at
+      SELECT
+        id, group_id, period_no, title, note, close_note, closing_snapshot_json, next_period_id,
+        status, opened_at, closed_at, created_at, updated_at
       FROM match_stakes_debt_periods
       WHERE id = $1 AND group_id = $2
       LIMIT 1
@@ -140,6 +164,9 @@ export class MatchStakesDebtRepository {
       period_no: number;
       title: string | null;
       note: string | null;
+      close_note: string | null;
+      closing_snapshot_json: unknown | null;
+      next_period_id: string | null;
       status: "OPEN" | "CLOSED";
       opened_at: string;
       closed_at: string | null;
@@ -147,7 +174,9 @@ export class MatchStakesDebtRepository {
       updated_at: string;
     }>(
       `
-      SELECT id, group_id, period_no, title, note, status, opened_at, closed_at, created_at, updated_at
+      SELECT
+        id, group_id, period_no, title, note, close_note, closing_snapshot_json, next_period_id,
+        status, opened_at, closed_at, created_at, updated_at
       FROM match_stakes_debt_periods
       WHERE group_id = $1
       ORDER BY opened_at DESC, created_at DESC
@@ -174,6 +203,9 @@ export class MatchStakesDebtRepository {
         period_no: number;
         title: string | null;
         note: string | null;
+        close_note: string | null;
+        closing_snapshot_json: unknown | null;
+        next_period_id: string | null;
         status: "OPEN" | "CLOSED";
         opened_at: string;
         closed_at: string | null;
@@ -189,7 +221,9 @@ export class MatchStakesDebtRepository {
         INSERT INTO match_stakes_debt_periods(group_id, period_no, title, note, status)
         SELECT $1, next_period.period_no, $2, $3, 'OPEN'
         FROM next_period
-        RETURNING id, group_id, period_no, title, note, status, opened_at, closed_at, created_at, updated_at
+        RETURNING
+          id, group_id, period_no, title, note, close_note, closing_snapshot_json, next_period_id,
+          status, opened_at, closed_at, created_at, updated_at
         `,
         [input.groupId, input.title, input.note]
       );
@@ -231,6 +265,7 @@ export class MatchStakesDebtRepository {
       player_id: string;
       player_name: string;
       total_matches: number;
+      init_net_vnd: number;
       accrued_net_vnd: number;
       settled_paid_vnd: number;
       settled_received_vnd: number;
@@ -243,6 +278,16 @@ export class MatchStakesDebtRepository {
         WHERE gm.group_id = $1
           AND gm.is_active = TRUE
           AND p.is_active = TRUE
+      ),
+      init_agg AS (
+        SELECT
+          ib.player_id,
+          COALESCE(SUM(ib.init_net_vnd), 0)::bigint AS init_net_vnd
+        FROM match_stakes_debt_period_init_balances ib
+        INNER JOIN match_stakes_debt_periods dp ON dp.id = ib.debt_period_id
+        WHERE dp.group_id = $1
+          AND ib.debt_period_id = $2
+        GROUP BY ib.player_id
       ),
       match_agg AS (
         SELECT
@@ -278,6 +323,8 @@ export class MatchStakesDebtRepository {
         GROUP BY l.receiver_player_id
       ),
       activity_players AS (
+        SELECT player_id FROM init_agg
+        UNION
         SELECT player_id FROM match_agg
         UNION
         SELECT player_id FROM paid_agg
@@ -296,10 +343,12 @@ export class MatchStakesDebtRepository {
         ps.player_id,
         ps.player_name,
         COALESCE(ma.total_matches, 0) AS total_matches,
+        COALESCE(ia.init_net_vnd, 0) AS init_net_vnd,
         COALESCE(ma.accrued_net_vnd, 0) AS accrued_net_vnd,
         COALESCE(pa.settled_paid_vnd, 0) AS settled_paid_vnd,
         COALESCE(ra.settled_received_vnd, 0) AS settled_received_vnd
       FROM player_scope ps
+      LEFT JOIN init_agg ia ON ia.player_id = ps.player_id
       LEFT JOIN match_agg ma ON ma.player_id = ps.player_id
       LEFT JOIN paid_agg pa ON pa.player_id = ps.player_id
       LEFT JOIN received_agg ra ON ra.player_id = ps.player_id
@@ -311,10 +360,65 @@ export class MatchStakesDebtRepository {
       playerId: row.player_id,
       playerName: row.player_name,
       totalMatches: row.total_matches,
+      initNetVnd: row.init_net_vnd,
       accruedNetVnd: row.accrued_net_vnd,
       settledPaidVnd: row.settled_paid_vnd,
       settledReceivedVnd: row.settled_received_vnd
     }));
+  }
+
+  public async listPeriodInitBalances(groupId: string, periodId: string): Promise<DebtPeriodInitBalanceRow[]> {
+    const result = await this.db.query<{
+      player_id: string;
+      player_name: string;
+      init_net_vnd: number;
+    }>(
+      `
+      SELECT
+        ib.player_id,
+        p.display_name AS player_name,
+        ib.init_net_vnd
+      FROM match_stakes_debt_period_init_balances ib
+      INNER JOIN players p ON p.id = ib.player_id
+      INNER JOIN match_stakes_debt_periods dp ON dp.id = ib.debt_period_id
+      WHERE ib.debt_period_id = $1
+        AND dp.group_id = $2
+      ORDER BY p.display_name ASC, ib.player_id ASC
+      `,
+      [periodId, groupId]
+    );
+
+    return result.rows.map((row) => ({
+      playerId: row.player_id,
+      playerName: row.player_name,
+      initNetVnd: row.init_net_vnd
+    }));
+  }
+
+  public async replacePeriodInitBalances(
+    periodId: string,
+    balances: Array<{
+      playerId: string;
+      initNetVnd: number;
+    }>
+  ): Promise<void> {
+    await this.db.query(`DELETE FROM match_stakes_debt_period_init_balances WHERE debt_period_id = $1`, [periodId]);
+
+    for (const balance of balances) {
+      if (balance.initNetVnd === 0) {
+        continue;
+      }
+
+      await this.db.query(
+        `
+        INSERT INTO match_stakes_debt_period_init_balances(debt_period_id, player_id, init_net_vnd)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (debt_period_id, player_id)
+        DO UPDATE SET init_net_vnd = EXCLUDED.init_net_vnd
+        `,
+        [periodId, balance.playerId, balance.initNetVnd]
+      );
+    }
   }
 
   public async countNonVoidedMatchesInPeriod(groupId: string, periodId: string): Promise<number> {
@@ -337,18 +441,19 @@ export class MatchStakesDebtRepository {
     const result = await this.db.query<{
       id: string;
       played_at: string;
+      period_match_no: number | null;
       participant_count: number;
       status: string;
       created_at: string;
     }>(
       `
-      SELECT id, played_at, participant_count, status, created_at
+      SELECT id, played_at, period_match_no, participant_count, status, created_at
       FROM matches
       WHERE group_id = $1
         AND module = 'MATCH_STAKES'
         AND debt_period_id = $2
         AND status <> 'VOIDED'
-      ORDER BY played_at ASC, created_at ASC
+      ORDER BY period_match_no ASC NULLS LAST, played_at ASC, created_at ASC, id ASC
       `,
       [input.groupId, input.debtPeriodId]
     );
@@ -356,6 +461,7 @@ export class MatchStakesDebtRepository {
     return result.rows.map((row) => ({
       id: row.id,
       playedAt: row.played_at,
+      periodMatchNo: row.period_match_no,
       participantCount: row.participant_count,
       status: row.status,
       createdAt: row.created_at
@@ -616,6 +722,8 @@ export class MatchStakesDebtRepository {
     groupId: string;
     periodId: string;
     closeNote: string | null;
+    closingSnapshot: unknown;
+    nextPeriodId: string | null;
   }): Promise<MatchStakesDebtPeriodRecord | null> {
     const result = await this.db.query<{
       id: string;
@@ -623,6 +731,9 @@ export class MatchStakesDebtRepository {
       period_no: number;
       title: string | null;
       note: string | null;
+      close_note: string | null;
+      closing_snapshot_json: unknown | null;
+      next_period_id: string | null;
       status: "OPEN" | "CLOSED";
       opened_at: string;
       closed_at: string | null;
@@ -634,21 +745,32 @@ export class MatchStakesDebtRepository {
       SET
         status = 'CLOSED',
         closed_at = now(),
-        note = CASE
-          WHEN $3::text IS NULL THEN note
-          WHEN note IS NULL OR btrim(note) = '' THEN $3
-          ELSE note || E'\\n\\n[Closed] ' || $3
-        END,
+        close_note = $3,
+        closing_snapshot_json = $4,
+        next_period_id = $5,
         updated_at = now()
       WHERE id = $1
         AND group_id = $2
         AND status = 'OPEN'
-      RETURNING id, group_id, period_no, title, note, status, opened_at, closed_at, created_at, updated_at
+      RETURNING
+        id, group_id, period_no, title, note, close_note, closing_snapshot_json, next_period_id,
+        status, opened_at, closed_at, created_at, updated_at
       `,
-      [input.periodId, input.groupId, input.closeNote]
+      [input.periodId, input.groupId, input.closeNote, input.closingSnapshot, input.nextPeriodId]
     );
 
     const row = result.rows[0];
     return row ? mapDebtPeriod(row) : null;
+  }
+
+  public async setNextPeriodId(periodId: string, nextPeriodId: string): Promise<void> {
+    await this.db.query(
+      `
+      UPDATE match_stakes_debt_periods
+      SET next_period_id = $2, updated_at = now()
+      WHERE id = $1
+      `,
+      [periodId, nextPeriodId]
+    );
   }
 }

@@ -8,6 +8,7 @@ interface DebtPeriodPlayerSummaryItem {
   playerId: string;
   playerName: string;
   totalMatches: number;
+  initNetVnd: number;
   accruedNetVnd: number;
   settledPaidVnd: number;
   settledReceivedVnd: number;
@@ -51,6 +52,8 @@ function toPeriodDto(period: MatchStakesDebtPeriodRecord) {
     periodNo: period.periodNo,
     title: period.title,
     note: period.note,
+    closeNote: period.closeNote,
+    nextPeriodId: period.nextPeriodId,
     status: period.status,
     openedAt: period.openedAt,
     closedAt: period.closedAt
@@ -200,7 +203,8 @@ export class MatchStakesService {
         participantCount: match.participant_count,
         status: match.status,
         debtPeriodId: match.debt_period_id,
-        debtPeriodNo: match.debt_period_no ?? null
+        debtPeriodNo: match.debt_period_no ?? null,
+        periodMatchNo: match.period_match_no ?? null
       }))
     };
   }
@@ -235,7 +239,8 @@ export class MatchStakesService {
       playerName: item.playerName
     }));
 
-    const cumulativeByPlayer = new Map(playerScope.map((item) => [item.playerId, 0]));
+    const initByPlayer = new Map(summary.players.map((item) => [item.playerId, item.initNetVnd]));
+    const cumulativeByPlayer = new Map(playerScope.map((item) => [item.playerId, initByPlayer.get(item.playerId) ?? 0]));
     const timelineAscending: DebtPeriodTimelineItem[] = periodMatches.map((match, index) => {
       const matchParticipants = participantsByMatchId.get(match.id) ?? [];
       const participantByPlayerId = new Map(matchParticipants.map((participant) => [participant.playerId, participant]));
@@ -260,7 +265,7 @@ export class MatchStakesService {
         type: "MATCH" as const,
         matchId: match.id,
         playedAt: match.playedAt,
-        matchNo: index + 1,
+        matchNo: match.periodMatchNo ?? index + 1,
         participantCount: match.participantCount,
         status: match.status,
         rows: sortTimelineRows(rows)
@@ -282,8 +287,8 @@ export class MatchStakesService {
             playerName: player.playerName,
             tftPlacement: null,
             relativeRank: null,
-            matchNetVnd: 0,
-            cumulativeNetVnd: 0
+            matchNetVnd: initByPlayer.get(player.playerId) ?? 0,
+            cumulativeNetVnd: initByPlayer.get(player.playerId) ?? 0
           }))
         )
       });
@@ -463,7 +468,16 @@ export class MatchStakesService {
     });
   }
 
-  public async closeDebtPeriod(periodId: string, input: { note?: string | null }) {
+  public async closeDebtPeriod(
+    periodId: string,
+    input: {
+      note?: string | null;
+      closingBalances: Array<{
+        playerId: string;
+        netVnd: number;
+      }>;
+    }
+  ) {
     return withTransaction(this.pool, async (tx) => {
       const txRepositories = createRepositories(tx);
       const period = await txRepositories.matchStakesDebt.getPeriodById(this.groupId, periodId);
@@ -475,26 +489,85 @@ export class MatchStakesService {
       }
 
       const summary = await this.buildDebtPeriodSummary(txRepositories, period.id);
-      const nonZeroPlayers = summary.players.filter((item) => item.outstandingNetVnd !== 0);
-      if (nonZeroPlayers.length > 0) {
-        throw unprocessable("DEBT_PERIOD_OUTSTANDING_NOT_ZERO", "Debt period cannot be closed while outstanding balances remain", {
-          nonZeroPlayers: nonZeroPlayers.map((item) => ({
-            playerId: item.playerId,
-            playerName: item.playerName,
-            outstandingNetVnd: item.outstandingNetVnd
-          }))
-        });
+      const submittedBalances = input.closingBalances ?? [];
+      const seen = new Set<string>();
+      for (const item of submittedBalances) {
+        if (seen.has(item.playerId)) {
+          throw badRequest("DEBT_PERIOD_CLOSING_BALANCE_INVALID", "closingBalances contains duplicate playerId");
+        }
+        seen.add(item.playerId);
+      }
+
+      const playerById = new Map(summary.players.map((item) => [item.playerId, item]));
+      for (const item of submittedBalances) {
+        if (!playerById.has(item.playerId)) {
+          throw badRequest(
+            "DEBT_PERIOD_CLOSING_BALANCE_INVALID",
+            "closingBalances contains playerId outside the current debt-period scope",
+            {
+              playerId: item.playerId
+            }
+          );
+        }
       }
 
       const closeNote = input.note?.trim() ? input.note.trim() : null;
+      const normalizedByPlayer = new Map(summary.players.map((item) => [item.playerId, 0]));
+      for (const item of submittedBalances) {
+        normalizedByPlayer.set(item.playerId, item.netVnd);
+      }
+
+      const normalizedClosingBalances = summary.players.map((player) => ({
+        playerId: player.playerId,
+        playerName: player.playerName,
+        netVnd: normalizedByPlayer.get(player.playerId) ?? 0
+      }));
+      const totalClosingNetVnd = normalizedClosingBalances.reduce((sum, item) => sum + item.netVnd, 0);
+      if (totalClosingNetVnd !== 0) {
+        throw unprocessable("DEBT_PERIOD_CLOSING_BALANCE_INVALID", "closingBalances must net to zero", {
+          totalClosingNetVnd
+        });
+      }
+
+      const closingSnapshot = {
+        submittedBalances: submittedBalances.map((item) => ({
+          playerId: item.playerId,
+          netVnd: item.netVnd
+        })),
+        normalizedBalances: normalizedClosingBalances,
+        outstandingBeforeClose: summary.players.map((item) => ({
+          playerId: item.playerId,
+          playerName: item.playerName,
+          outstandingNetVnd: item.outstandingNetVnd
+        }))
+      };
+
       const closedPeriod = await txRepositories.matchStakesDebt.closeOpenPeriod({
         groupId: this.groupId,
         periodId: period.id,
-        closeNote
+        closeNote,
+        closingSnapshot,
+        nextPeriodId: null
       });
       if (!closedPeriod) {
         throw unprocessable("DEBT_PERIOD_NOT_OPEN", "Debt period is not open");
       }
+
+      const nextPeriod = await txRepositories.matchStakesDebt.createOpenPeriod({
+        groupId: this.groupId,
+        title: null,
+        note: null
+      });
+
+      await txRepositories.matchStakesDebt.replacePeriodInitBalances(
+        nextPeriod.id,
+        normalizedClosingBalances.map((item) => ({
+          playerId: item.playerId,
+          initNetVnd: item.netVnd
+        }))
+      );
+
+      await txRepositories.matchStakesDebt.setNextPeriodId(period.id, nextPeriod.id);
 
       await txRepositories.audits.insert({
         groupId: this.groupId,
@@ -504,14 +577,21 @@ export class MatchStakesService {
         after: {
           status: "CLOSED",
           closedAt: closedPeriod.closedAt,
-          note: closeNote
+          note: closeNote,
+          nextPeriodId: nextPeriod.id,
+          submittedBalances: submittedBalances.map((item) => ({
+            playerId: item.playerId,
+            netVnd: item.netVnd
+          }))
         }
       });
 
       return {
         id: closedPeriod.id,
         status: closedPeriod.status,
-        closedAt: closedPeriod.closedAt
+        closedAt: closedPeriod.closedAt,
+        nextPeriod: toPeriodDto(nextPeriod),
+        carryForwardBalances: normalizedClosingBalances
       };
     });
   }
@@ -567,10 +647,11 @@ export class MatchStakesService {
         playerId: item.playerId,
         playerName: item.playerName,
         totalMatches: item.totalMatches,
+        initNetVnd: item.initNetVnd,
         accruedNetVnd: item.accruedNetVnd,
         settledPaidVnd: item.settledPaidVnd,
         settledReceivedVnd: item.settledReceivedVnd,
-        outstandingNetVnd: item.accruedNetVnd - item.settledReceivedVnd + item.settledPaidVnd
+        outstandingNetVnd: item.initNetVnd + item.accruedNetVnd - item.settledReceivedVnd + item.settledPaidVnd
       }))
     );
 

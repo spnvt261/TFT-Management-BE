@@ -531,42 +531,27 @@ describe("API - rules, matches, summaries", () => {
     });
     expect(createFirstSettlementResponse.statusCode).toBe(201);
 
-    const closeNotSettledResponse = await app.inject({
-      method: "POST",
-      url: `/api/v1/match-stakes/debt-periods/${currentPeriod.id}/close`,
-      payload: {}
-    });
-    expect(closeNotSettledResponse.statusCode).toBe(422);
-
-    const createSecondSettlementResponse = await app.inject({
-      method: "POST",
-      url: `/api/v1/match-stakes/debt-periods/${currentPeriod.id}/settlements`,
-      payload: {
-        lines: [
-          {
-            payerPlayerId: "10000000-0000-4000-8000-000000000003",
-            receiverPlayerId: "10000000-0000-4000-8000-000000000001",
-            amountVnd: 50000
-          }
-        ]
-      }
-    });
-    expect(createSecondSettlementResponse.statusCode).toBe(201);
-
     const closeResponse = await app.inject({
       method: "POST",
       url: `/api/v1/match-stakes/debt-periods/${currentPeriod.id}/close`,
-      payload: { note: "done" }
+      payload: {
+        note: "carry remaining debt",
+        closingBalances: [
+          { playerId: "10000000-0000-4000-8000-000000000001", netVnd: 50000 },
+          { playerId: "10000000-0000-4000-8000-000000000003", netVnd: -50000 }
+        ]
+      }
     });
     expect(closeResponse.statusCode).toBe(200);
     expect(closeResponse.json().data.status).toBe("CLOSED");
+    expect(closeResponse.json().data.nextPeriod.status).toBe("OPEN");
 
     const createNewPeriodResponse = await app.inject({
       method: "POST",
       url: "/api/v1/match-stakes/debt-periods",
       payload: { title: "New cycle" }
     });
-    expect(createNewPeriodResponse.statusCode).toBe(201);
+    expect(createNewPeriodResponse.statusCode).toBe(409);
 
     const moduleMatchesResponse = await app.inject({
       method: "GET",
@@ -575,6 +560,7 @@ describe("API - rules, matches, summaries", () => {
     expect(moduleMatchesResponse.statusCode).toBe(200);
     expect(moduleMatchesResponse.json().data[0].debtPeriodId).toBe(currentPeriod.id);
     expect(moduleMatchesResponse.json().data[0].debtPeriodNo).toBe(1);
+    expect(moduleMatchesResponse.json().data[0].periodMatchNo).toBe(1);
 
     const matchDetailResponse = await app.inject({
       method: "GET",
@@ -582,5 +568,6 @@ describe("API - rules, matches, summaries", () => {
     });
     expect(matchDetailResponse.statusCode).toBe(200);
     expect(matchDetailResponse.json().data.debtPeriodId).toBe(currentPeriod.id);
+    expect(matchDetailResponse.json().data.periodMatchNo).toBe(1);
   });
 });

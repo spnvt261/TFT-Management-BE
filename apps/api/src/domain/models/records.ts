@@ -108,6 +108,9 @@ export interface MatchStakesDebtPeriodRecord {
   periodNo: number;
   title: string | null;
   note: string | null;
+  closeNote: string | null;
+  closingSnapshotJson: unknown | null;
+  nextPeriodId: string | null;
   status: DebtPeriodStatus;
   openedAt: string;
   closedAt: string | null;

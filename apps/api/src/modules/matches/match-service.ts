@@ -161,12 +161,14 @@ export class MatchService {
       );
       const debtPeriod =
         input.module === "MATCH_STAKES" ? await txRepositories.matchStakesDebt.getOrCreateOpenPeriod(this.groupId) : null;
+      const periodMatchNo = debtPeriod ? await txRepositories.matches.reserveNextPeriodMatchNo(debtPeriod.id) : null;
 
       const persisted = await this.persistCreatedMatch({
         txRepositories,
         input,
         playedAt,
         debtPeriodId: debtPeriod?.id ?? null,
+        periodMatchNo,
         ruleSet: {
           id: ruleSet.id,
           name: ruleSet.name,
@@ -281,6 +283,7 @@ export class MatchService {
           ruleSetVersionNo: match.rule_set_version_no ?? 1,
           debtPeriodId: match.module === "MATCH_STAKES" ? match.debt_period_id : null,
           debtPeriodNo: match.module === "MATCH_STAKES" ? (match.debt_period_no ?? null) : null,
+          periodMatchNo: match.module === "MATCH_STAKES" ? (match.period_match_no ?? null) : null,
           notePreview: note ? note.slice(0, 120) : null,
           status: match.status,
           confirmationMode: confirmation.confirmationMode,
@@ -345,6 +348,7 @@ export class MatchService {
       participants,
       debtPeriodId: match.module === "MATCH_STAKES" ? match.debt_period_id : null,
       debtPeriodNo: match.module === "MATCH_STAKES" ? (match.debt_period_no ?? null) : null,
+      periodMatchNo: match.module === "MATCH_STAKES" ? (match.period_match_no ?? null) : null,
       engineCalculationSnapshot: match.calculation_snapshot_json ?? null,
       settlement,
       voidReason: match.void_reason,
@@ -415,6 +419,7 @@ export class MatchService {
     input: CreateMatchInput;
     playedAt: string;
     debtPeriodId: string | null;
+    periodMatchNo: number | null;
     ruleSet: {
       id: string;
       name: string;
@@ -455,6 +460,7 @@ export class MatchService {
       ruleSetId: input.input.ruleSetId,
       ruleSetVersionId: input.ruleVersion.id,
       debtPeriodId: input.debtPeriodId,
+      periodMatchNo: input.periodMatchNo,
       playedAt: input.playedAt,
       participantCount: input.input.participants.length,
       status: "POSTED",

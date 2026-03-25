@@ -20,6 +20,8 @@ const openPeriod = {
   periodNo: 1,
   title: "Period 1",
   note: null,
+  closeNote: null,
+  nextPeriodId: null,
   status: "OPEN" as const,
   openedAt: "2026-01-01T00:00:00.000Z",
   closedAt: null,
@@ -53,7 +55,9 @@ function createFixture() {
       createOpenPeriod: vi.fn(),
       createSettlement: vi.fn(),
       insertSettlementLines: vi.fn(),
-      closeOpenPeriod: vi.fn()
+      closeOpenPeriod: vi.fn(),
+      replacePeriodInitBalances: vi.fn(),
+      setNextPeriodId: vi.fn()
     }
   } as any;
 
@@ -81,6 +85,7 @@ describe("match-stakes debt period service", () => {
         playerId: "10000000-0000-4000-8000-000000000001",
         playerName: "An",
         totalMatches: 3,
+        initNetVnd: 5000,
         accruedNetVnd: 100000,
         settledPaidVnd: 0,
         settledReceivedVnd: 40000
@@ -89,6 +94,7 @@ describe("match-stakes debt period service", () => {
         playerId: "10000000-0000-4000-8000-000000000002",
         playerName: "Binh",
         totalMatches: 3,
+        initNetVnd: -5000,
         accruedNetVnd: -100000,
         settledPaidVnd: 40000,
         settledReceivedVnd: 0
@@ -100,10 +106,11 @@ describe("match-stakes debt period service", () => {
 
     expect(result.period.id).toBe(openPeriod.id);
     expect(result.summary.totalMatches).toBe(3);
-    expect(result.summary.totalOutstandingReceiveVnd).toBe(60000);
-    expect(result.summary.totalOutstandingPayVnd).toBe(60000);
+    expect(result.summary.totalOutstandingReceiveVnd).toBe(65000);
+    expect(result.summary.totalOutstandingPayVnd).toBe(65000);
     expect(result.players[0]?.playerName).toBe("An");
-    expect(result.players[0]?.outstandingNetVnd).toBe(60000);
+    expect(result.players[0]?.initNetVnd).toBe(5000);
+    expect(result.players[0]?.outstandingNetVnd).toBe(65000);
   });
 
   it("lists and expands debt periods with cumulative totals", async () => {
@@ -127,7 +134,8 @@ describe("match-stakes debt period service", () => {
           playerId: "10000000-0000-4000-8000-000000000001",
           playerName: "An",
           totalMatches: 1,
-          accruedNetVnd: 50000,
+          initNetVnd: 0,
+        accruedNetVnd: 50000,
           settledPaidVnd: 0,
           settledReceivedVnd: 0
         },
@@ -135,7 +143,8 @@ describe("match-stakes debt period service", () => {
           playerId: "10000000-0000-4000-8000-000000000002",
           playerName: "Binh",
           totalMatches: 1,
-          accruedNetVnd: -50000,
+          initNetVnd: 0,
+        accruedNetVnd: -50000,
           settledPaidVnd: 0,
           settledReceivedVnd: 0
         }
@@ -145,7 +154,8 @@ describe("match-stakes debt period service", () => {
           playerId: "10000000-0000-4000-8000-000000000001",
           playerName: "An",
           totalMatches: 2,
-          accruedNetVnd: 0,
+          initNetVnd: 0,
+        accruedNetVnd: 0,
           settledPaidVnd: 0,
           settledReceivedVnd: 0
         }
@@ -168,6 +178,7 @@ describe("match-stakes debt period service", () => {
         playerId: "10000000-0000-4000-8000-000000000001",
         playerName: "An",
         totalMatches: 2,
+        initNetVnd: 0,
         accruedNetVnd: 100000,
         settledPaidVnd: 0,
         settledReceivedVnd: 50000
@@ -176,6 +187,7 @@ describe("match-stakes debt period service", () => {
         playerId: "10000000-0000-4000-8000-000000000002",
         playerName: "Binh",
         totalMatches: 2,
+        initNetVnd: 0,
         accruedNetVnd: -100000,
         settledPaidVnd: 50000,
         settledReceivedVnd: 0
@@ -233,6 +245,7 @@ describe("match-stakes debt period service", () => {
         playerId: "10000000-0000-4000-8000-000000000001",
         playerName: "An",
         totalMatches: 2,
+        initNetVnd: 0,
         accruedNetVnd: 300000,
         settledPaidVnd: 0,
         settledReceivedVnd: 0
@@ -241,6 +254,7 @@ describe("match-stakes debt period service", () => {
         playerId: "10000000-0000-4000-8000-000000000002",
         playerName: "Binh",
         totalMatches: 2,
+        initNetVnd: 0,
         accruedNetVnd: -150000,
         settledPaidVnd: 0,
         settledReceivedVnd: 0
@@ -249,6 +263,7 @@ describe("match-stakes debt period service", () => {
         playerId: "10000000-0000-4000-8000-000000000003",
         playerName: "Chi",
         totalMatches: 2,
+        initNetVnd: 0,
         accruedNetVnd: -150000,
         settledPaidVnd: 0,
         settledReceivedVnd: 0
@@ -257,6 +272,7 @@ describe("match-stakes debt period service", () => {
         playerId: "10000000-0000-4000-8000-000000000004",
         playerName: "Dung",
         totalMatches: 0,
+        initNetVnd: 0,
         accruedNetVnd: 0,
         settledPaidVnd: 0,
         settledReceivedVnd: 0
@@ -362,6 +378,7 @@ describe("match-stakes debt period service", () => {
         playerId: "10000000-0000-4000-8000-000000000001",
         playerName: "An",
         totalMatches: 1,
+        initNetVnd: 0,
         accruedNetVnd: 100000,
         settledPaidVnd: 0,
         settledReceivedVnd: 0
@@ -407,7 +424,8 @@ describe("match-stakes debt period service", () => {
           playerId: "10000000-0000-4000-8000-000000000001",
           playerName: "An",
           totalMatches: 2,
-          accruedNetVnd: 100000,
+          initNetVnd: 0,
+        accruedNetVnd: 100000,
           settledPaidVnd: 0,
           settledReceivedVnd: 0
         },
@@ -415,7 +433,8 @@ describe("match-stakes debt period service", () => {
           playerId: "10000000-0000-4000-8000-000000000002",
           playerName: "Binh",
           totalMatches: 2,
-          accruedNetVnd: -100000,
+          initNetVnd: 0,
+        accruedNetVnd: -100000,
           settledPaidVnd: 0,
           settledReceivedVnd: 0
         }
@@ -425,7 +444,8 @@ describe("match-stakes debt period service", () => {
           playerId: "10000000-0000-4000-8000-000000000001",
           playerName: "An",
           totalMatches: 2,
-          accruedNetVnd: 100000,
+          initNetVnd: 0,
+        accruedNetVnd: 100000,
           settledPaidVnd: 0,
           settledReceivedVnd: 50000
         },
@@ -433,7 +453,8 @@ describe("match-stakes debt period service", () => {
           playerId: "10000000-0000-4000-8000-000000000002",
           playerName: "Binh",
           totalMatches: 2,
-          accruedNetVnd: -100000,
+          initNetVnd: 0,
+        accruedNetVnd: -100000,
           settledPaidVnd: 50000,
           settledReceivedVnd: 0
         }
@@ -487,6 +508,7 @@ describe("match-stakes debt period service", () => {
         playerId: "10000000-0000-4000-8000-000000000001",
         playerName: "An",
         totalMatches: 2,
+        initNetVnd: 0,
         accruedNetVnd: 100000,
         settledPaidVnd: 0,
         settledReceivedVnd: 0
@@ -495,6 +517,7 @@ describe("match-stakes debt period service", () => {
         playerId: "10000000-0000-4000-8000-000000000002",
         playerName: "Binh",
         totalMatches: 2,
+        initNetVnd: 0,
         accruedNetVnd: -100000,
         settledPaidVnd: 0,
         settledReceivedVnd: 0
@@ -515,7 +538,7 @@ describe("match-stakes debt period service", () => {
     ).rejects.toMatchObject({ code: "DEBT_SETTLEMENT_OVERPAY" });
   });
 
-  it("closes period only when outstanding balances are all zero", async () => {
+  it("rejects close when carry-forward balances do not net to zero", async () => {
     const { service, txRepositories } = createFixture();
     txRepositories.matchStakesDebt.getPeriodById.mockResolvedValue(openPeriod);
     txRepositories.matchStakesDebt.listPeriodPlayerAggregates.mockResolvedValue([
@@ -523,6 +546,7 @@ describe("match-stakes debt period service", () => {
         playerId: "10000000-0000-4000-8000-000000000001",
         playerName: "An",
         totalMatches: 2,
+        initNetVnd: 0,
         accruedNetVnd: 100000,
         settledPaidVnd: 0,
         settledReceivedVnd: 50000
@@ -530,12 +554,16 @@ describe("match-stakes debt period service", () => {
     ]);
     txRepositories.matchStakesDebt.countNonVoidedMatchesInPeriod.mockResolvedValue(2);
 
-    await expect(service.closeDebtPeriod(openPeriod.id, {})).rejects.toMatchObject({
-      code: "DEBT_PERIOD_OUTSTANDING_NOT_ZERO"
+    await expect(
+      service.closeDebtPeriod(openPeriod.id, {
+        closingBalances: [{ playerId: "10000000-0000-4000-8000-000000000001", netVnd: 1000 }]
+      })
+    ).rejects.toMatchObject({
+      code: "DEBT_PERIOD_CLOSING_BALANCE_INVALID"
     });
   });
 
-  it("closes period when summary is fully settled", async () => {
+  it("closes period and creates next open period with carry-forward init balances", async () => {
     const { service, txRepositories } = createFixture();
     txRepositories.matchStakesDebt.getPeriodById.mockResolvedValue(openPeriod);
     txRepositories.matchStakesDebt.listPeriodPlayerAggregates.mockResolvedValue([
@@ -543,16 +571,18 @@ describe("match-stakes debt period service", () => {
         playerId: "10000000-0000-4000-8000-000000000001",
         playerName: "An",
         totalMatches: 2,
+        initNetVnd: 0,
         accruedNetVnd: 100000,
         settledPaidVnd: 0,
-        settledReceivedVnd: 100000
+        settledReceivedVnd: 50000
       },
       {
         playerId: "10000000-0000-4000-8000-000000000002",
         playerName: "Binh",
         totalMatches: 2,
+        initNetVnd: 0,
         accruedNetVnd: -100000,
-        settledPaidVnd: 100000,
+        settledPaidVnd: 50000,
         settledReceivedVnd: 0
       }
     ]);
@@ -562,10 +592,36 @@ describe("match-stakes debt period service", () => {
       status: "CLOSED",
       closedAt: "2026-01-10T00:00:00.000Z"
     });
+    txRepositories.matchStakesDebt.createOpenPeriod.mockResolvedValue({
+      ...openPeriod,
+      id: "90000000-0000-4000-8000-000000000099",
+      periodNo: 2,
+      title: null,
+      note: null
+    });
+    txRepositories.matchStakesDebt.replacePeriodInitBalances.mockResolvedValue(undefined);
+    txRepositories.matchStakesDebt.setNextPeriodId.mockResolvedValue(undefined);
 
-    const result = await service.closeDebtPeriod(openPeriod.id, { note: "all settled" });
+    const result = await service.closeDebtPeriod(openPeriod.id, {
+      note: "carry 50",
+      closingBalances: [
+        { playerId: "10000000-0000-4000-8000-000000000001", netVnd: 50000 },
+        { playerId: "10000000-0000-4000-8000-000000000002", netVnd: -50000 }
+      ]
+    });
 
     expect(result.status).toBe("CLOSED");
     expect(result.closedAt).toBe("2026-01-10T00:00:00.000Z");
+    expect(result.nextPeriod.periodNo).toBe(2);
+    expect(result.carryForwardBalances).toHaveLength(2);
+    expect(txRepositories.matchStakesDebt.replacePeriodInitBalances).toHaveBeenCalledWith(
+      "90000000-0000-4000-8000-000000000099",
+      [
+        { playerId: "10000000-0000-4000-8000-000000000001", initNetVnd: 50000 },
+        { playerId: "10000000-0000-4000-8000-000000000002", initNetVnd: -50000 }
+      ]
+    );
   });
 });
+
+

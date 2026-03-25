@@ -65,6 +65,7 @@ function createFixture() {
     },
     matches: {
       createMatch: vi.fn().mockResolvedValue({ id: "match-1" }),
+      reserveNextPeriodMatchNo: vi.fn().mockResolvedValue(1),
       insertParticipants: vi.fn().mockResolvedValue(undefined),
       upsertNote: vi.fn().mockResolvedValue(undefined),
       list: vi.fn().mockResolvedValue({ items: [], total: 0 }),
@@ -97,6 +98,8 @@ function createFixture() {
         periodNo: 1,
         title: null,
         note: null,
+        closeNote: null,
+        nextPeriodId: null,
         status: "OPEN",
         openedAt: "2025-01-01T00:00:00.000Z",
         closedAt: null,
