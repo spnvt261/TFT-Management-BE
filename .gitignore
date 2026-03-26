@@ -5,3 +5,4 @@ dist
 coverage
 *.log
 promt
+docs/vercel_deploy_guide.md

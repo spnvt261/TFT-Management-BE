@@ -3,6 +3,8 @@ import { z } from "zod";
 
 dotenv.config();
 
+const isVercelRuntime = process.env.VERCEL === "1";
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   APP_HOST: z.string().default("0.0.0.0"),
@@ -10,6 +12,7 @@ const envSchema = z.object({
   LOG_LEVEL: z.string().default("info"),
   DEFAULT_GROUP_CODE: z.string().default("TFT_FRIENDS"),
 
+  DB_URL: z.string().optional(),
   DB_HOST: z.string().default("127.0.0.1"),
   DB_PORT: z.coerce.number().int().positive().default(5432),
   DB_USER: z.string().default("postgres"),
@@ -19,16 +22,16 @@ const envSchema = z.object({
   DB_SSL: z
     .string()
     .optional()
-    .transform((value) => value === "true"),
+    .transform((value) => (value === undefined ? isVercelRuntime : value === "true")),
   DB_BOOTSTRAP_ENABLED: z
     .string()
     .optional()
-    .transform((value) => value !== "false"),
+    .transform((value) => (value === undefined ? !isVercelRuntime : value !== "false")),
 
   FLYWAY_ENABLED: z
     .string()
     .optional()
-    .transform((value) => value !== "false"),
+    .transform((value) => (value === undefined ? !isVercelRuntime : value !== "false")),
   FLYWAY_COMMAND: z.string().default("flyway"),
   FLYWAY_LOCATIONS: z.string().optional(),
 
@@ -47,6 +50,7 @@ export const env = {
   },
   defaultGroupCode: parsed.DEFAULT_GROUP_CODE,
   db: {
+    url: parsed.DB_URL,
     host: parsed.DB_HOST,
     port: parsed.DB_PORT,
     user: parsed.DB_USER,
