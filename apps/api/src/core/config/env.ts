@@ -31,7 +31,7 @@ const envSchema = z.object({
   FLYWAY_ENABLED: z
     .string()
     .optional()
-    .transform((value) => (value === undefined ? !isVercelRuntime : value !== "false")),
+    .transform((value) => (value === undefined ? true : value !== "false")),
   FLYWAY_COMMAND: z.string().default("flyway"),
   FLYWAY_LOCATIONS: z.string().optional(),
 

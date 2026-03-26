@@ -45,6 +45,7 @@ export async function bootstrapApp(options: BootstrapOptions = {}): Promise<Boot
     await runFlywayMigrations({
       enabled: env.flyway.enabled,
       command: env.flyway.command,
+      databaseUrl: env.db.url,
       host: env.db.host,
       port: env.db.port,
       database: env.db.database,

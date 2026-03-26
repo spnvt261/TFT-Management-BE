@@ -16,7 +16,7 @@ If stage 1 fails, HTTP does not start.
 
 - Node.js 20+
 - PostgreSQL 14+
-- Flyway CLI available in PATH (or set `FLYWAY_COMMAND`) when running migrations from backend process
+- Flyway CLI in PATH is optional. If unavailable, backend will use built-in SQL migration runner.
 
 ## Environment
 
@@ -25,7 +25,7 @@ Copy root `.env.example` to `.env` and adjust values.
 Important variables:
 
 - `DB_BOOTSTRAP_ENABLED=true|false`
-- `FLYWAY_ENABLED=true|false` (set `false` if Docker Compose Flyway service handles migrations)
+- `FLYWAY_ENABLED=true|false` (defaults to `true` if unset)
 - `FLYWAY_COMMAND=flyway`
 - `FLYWAY_LOCATIONS=filesystem:<absolute-path>` (optional)
 
