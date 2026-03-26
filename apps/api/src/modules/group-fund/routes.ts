@@ -15,6 +15,12 @@ const querySchema = z.object({
 
 const summaryQuerySchema = z.object({ from: z.string().datetime().optional(), to: z.string().datetime().optional() });
 const groupFundTransactionTypeSchema = z.enum(["CONTRIBUTION", "WITHDRAWAL", "ADJUSTMENT_IN", "ADJUSTMENT_OUT"]);
+const markGroupFundContributionSchema = z.object({
+  playerId: uuidSchema,
+  amountVnd: z.coerce.number().int().positive(),
+  note: z.string().max(500).nullable().optional(),
+  postedAt: z.string().datetime().optional()
+});
 
 const createGroupFundTransactionSchema = z
   .object({
@@ -61,7 +67,9 @@ const groupFundSummarySchema = z.object({
       playerId: uuidSchema,
       playerName: z.string(),
       totalContributedVnd: z.number().int(),
-      currentObligationVnd: z.number().int()
+      currentObligationVnd: z.number().int(),
+      netObligationVnd: z.number().int(),
+      prepaidVnd: z.number().int().nonnegative()
     })
   ),
   range: z.object({
@@ -121,7 +129,43 @@ const groupFundTransactionResponseSchema = z.object({
   reason: z.string()
 });
 
+const markGroupFundContributionResponseSchema = z.object({
+  batchId: uuidSchema,
+  postedAt: z.string(),
+  playerId: uuidSchema,
+  playerName: z.string(),
+  amountVnd: z.number().int(),
+  note: z.string().nullable()
+});
+
 export async function registerGroupFundRoutes(app: FastifyInstance, services: AppServices): Promise<void> {
+  app.post(
+    "/group-fund/contributions",
+    {
+      schema: {
+        tags: ["Group Fund"],
+        summary: "Mark player paid into group fund",
+        body: toSwaggerSchema(markGroupFundContributionSchema),
+        response: {
+          201: successResponseSchema(markGroupFundContributionResponseSchema),
+          ...errorResponseSchemas
+        }
+      }
+    },
+    async (request, reply) => {
+      const input = markGroupFundContributionSchema.parse(request.body);
+      const created = await services.groupFund.markContributionPaid({
+        playerId: input.playerId,
+        amountVnd: input.amountVnd,
+        note: input.note,
+        postedAt: input.postedAt
+      });
+
+      reply.status(201);
+      return ok(created);
+    }
+  );
+
   app.post(
     "/group-fund/transactions",
     {

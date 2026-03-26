@@ -68,6 +68,33 @@ export class GroupFundService {
     });
   }
 
+  public async markContributionPaid(input: {
+    playerId: string;
+    amountVnd: number;
+    note?: string | null;
+    postedAt?: string;
+  }) {
+    const normalizedNote = input.note?.trim() ?? "";
+    const reason = normalizedNote.length > 0 ? normalizedNote : "Marked player paid into group fund";
+
+    const created = await this.createManualTransaction({
+      transactionType: "WITHDRAWAL",
+      playerId: input.playerId,
+      amountVnd: input.amountVnd,
+      reason,
+      postedAt: input.postedAt
+    });
+
+    return {
+      batchId: created.batchId,
+      postedAt: created.postedAt,
+      playerId: created.playerId ?? input.playerId,
+      playerName: created.playerName ?? input.playerId,
+      amountVnd: created.amountVnd,
+      note: normalizedNote.length > 0 ? normalizedNote : null
+    };
+  }
+
   public async createManualTransaction(input: {
     transactionType: GroupFundTransactionType;
     playerId?: string | null;

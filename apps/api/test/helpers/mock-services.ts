@@ -1382,7 +1382,9 @@ export function createMockServices(): AppServices {
           playerId: item.id,
           playerName: item.displayName,
           totalContributedVnd: 0,
-          currentObligationVnd: 0
+          currentObligationVnd: 0,
+          netObligationVnd: 0,
+          prepaidVnd: 0
         })),
         range: { from: null, to: null }
       }),
@@ -1395,6 +1397,31 @@ export function createMockServices(): AppServices {
       getMatches: async ({ page, pageSize }) => {
         const items = Array.from(matches.values()).filter((item) => item.module === "GROUP_FUND");
         return { items, total: items.length, page, pageSize };
+      },
+      markContributionPaid: async (input) => {
+        const note = typeof input.note === "string" ? input.note.trim() : "";
+        const transaction: ManualGroupFundTransaction = {
+          batchId: uid("batch"),
+          entryId: uid("entry"),
+          postedAt: input.postedAt ?? new Date().toISOString(),
+          sourceType: "MANUAL_ADJUSTMENT",
+          transactionType: "WITHDRAWAL",
+          playerId: input.playerId,
+          playerName: players.get(input.playerId)?.displayName ?? input.playerId,
+          amountVnd: input.amountVnd,
+          reason: note.length > 0 ? note : "Marked player paid into group fund"
+        };
+
+        manualGroupFundTransactions.unshift(transaction);
+
+        return {
+          batchId: transaction.batchId,
+          postedAt: transaction.postedAt,
+          playerId: transaction.playerId ?? input.playerId,
+          playerName: transaction.playerName ?? input.playerId,
+          amountVnd: transaction.amountVnd,
+          note: note.length > 0 ? note : null
+        };
       },
       createManualTransaction: async (input) => {
         const transaction: ManualGroupFundTransaction = {

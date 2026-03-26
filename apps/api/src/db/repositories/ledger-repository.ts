@@ -304,6 +304,8 @@ export class LedgerRepository {
       playerName: string;
       totalContributedVnd: number;
       currentObligationVnd: number;
+      netObligationVnd: number;
+      prepaidVnd: number;
     }>;
   }> {
     const rangeConditions: string[] = [];
@@ -346,17 +348,26 @@ export class LedgerRepository {
       player_name: string;
       total_contributed_vnd: number;
       current_obligation_vnd: number;
+      net_obligation_vnd: number;
+      prepaid_vnd: number;
     }>(
       `
       SELECT
         p.id AS player_id,
         p.display_name AS player_name,
         COALESCE(SUM(CASE WHEN da.account_type = 'FUND_MAIN' AND sa.player_id = p.id THEN e.amount_vnd ELSE 0 END), 0) AS total_contributed_vnd,
+        COALESCE(SUM(CASE WHEN sa.player_id = p.id THEN e.amount_vnd ELSE 0 END), 0)
+          - COALESCE(SUM(CASE WHEN da.player_id = p.id THEN e.amount_vnd ELSE 0 END), 0) AS net_obligation_vnd,
         GREATEST(
           COALESCE(SUM(CASE WHEN sa.player_id = p.id THEN e.amount_vnd ELSE 0 END), 0)
             - COALESCE(SUM(CASE WHEN da.player_id = p.id THEN e.amount_vnd ELSE 0 END), 0),
           0
-        ) AS current_obligation_vnd
+        ) AS current_obligation_vnd,
+        GREATEST(
+          COALESCE(SUM(CASE WHEN da.player_id = p.id THEN e.amount_vnd ELSE 0 END), 0)
+            - COALESCE(SUM(CASE WHEN sa.player_id = p.id THEN e.amount_vnd ELSE 0 END), 0),
+          0
+        ) AS prepaid_vnd
       FROM players p
       INNER JOIN group_members gm ON gm.player_id = p.id AND gm.group_id = $1 AND gm.is_active = TRUE
       LEFT JOIN ledger_accounts pa ON pa.player_id = p.id AND pa.group_id = $1 AND pa.account_type = 'PLAYER_FUND_OBLIGATION'
@@ -377,7 +388,9 @@ export class LedgerRepository {
         playerId: row.player_id,
         playerName: row.player_name,
         totalContributedVnd: row.total_contributed_vnd,
-        currentObligationVnd: row.current_obligation_vnd
+        currentObligationVnd: row.current_obligation_vnd,
+        netObligationVnd: row.net_obligation_vnd,
+        prepaidVnd: row.prepaid_vnd
       }))
     };
   }

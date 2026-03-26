@@ -450,6 +450,19 @@ describe("API - rules, matches, summaries", () => {
     const groupFundSummaryResponse = await injectAsAdmin({ method: "GET", url: "/api/v1/group-fund/summary" });
     expect(groupFundSummaryResponse.statusCode).toBe(200);
 
+    const markGroupFundContributionResponse = await injectAsAdmin({
+      method: "POST",
+      url: "/api/v1/group-fund/contributions",
+      payload: {
+        playerId: "10000000-0000-4000-8000-000000000001",
+        amountVnd: 25000,
+        note: "Paid by player"
+      }
+    });
+    expect(markGroupFundContributionResponse.statusCode).toBe(201);
+    expect(markGroupFundContributionResponse.json().data.playerId).toBe("10000000-0000-4000-8000-000000000001");
+    expect(markGroupFundContributionResponse.json().data.note).toBe("Paid by player");
+
     const createManualGroupFundTransactionResponse = await injectAsAdmin({
       method: "POST",
       url: "/api/v1/group-fund/transactions",

@@ -201,6 +201,7 @@ Authorization rules by HTTP method:
 | POST | `/api/v1/match-stakes/debt-periods/:periodId/close` | Close a Match Stakes debt period and carry forward balances |
 | GET | `/api/v1/match-stakes/ledger` | Match Stakes ledger history |
 | GET | `/api/v1/match-stakes/matches` | Match Stakes match history |
+| POST | `/api/v1/group-fund/contributions` | Mark a player paid into Group Fund |
 | POST | `/api/v1/group-fund/transactions` | Create manual Group Fund transaction |
 | GET | `/api/v1/group-fund/transactions` | List manual Group Fund transactions |
 | GET | `/api/v1/group-fund/summary` | Group Fund summary |
@@ -1666,6 +1667,8 @@ ApiSuccessResponse<{
     playerName: string;
     totalContributedVnd: number;
     currentObligationVnd: number;
+    netObligationVnd: number; // signed, can be negative when prepaid
+    prepaidVnd: number; // max(-netObligationVnd, 0)
   }>;
   range: { from: string | null; to: string | null };
 }>;
@@ -1674,9 +1677,44 @@ ApiSuccessResponse<{
 Processing flow:
 
 1. Compute `fundBalanceVnd` from ledger movements in/out of `FUND_MAIN`.
-2. Compute per-player contribution and current obligation.
+2. Compute per-player contribution, signed/net obligation, outstanding obligation, and prepaid carry-forward.
 3. Count module matches.
 4. Return summary.
+
+### POST `/api/v1/group-fund/contributions`
+
+Business purpose: business-friendly API to mark that a player has paid into the fund.
+
+Request DTO:
+
+```ts
+interface MarkGroupFundContributionRequest {
+  playerId: string; // required uuid
+  amountVnd: number; // positive integer
+  note?: string | null; // optional note from FE
+  postedAt?: string; // optional ISO datetime
+}
+```
+
+Response DTO:
+
+```ts
+ApiSuccessResponse<{
+  batchId: string;
+  postedAt: string;
+  playerId: string;
+  playerName: string;
+  amountVnd: number;
+  note: string | null;
+}>;
+```
+
+Processing flow:
+
+1. Validate player and amount.
+2. Create an auditable ledger batch/entry in `GROUP_FUND`.
+3. Store note as entry reason when provided.
+4. Return created contribution payload.
 
 ### POST `/api/v1/group-fund/transactions`
 
