@@ -1,1 +1,1 @@
-export { default } from "../apps/api/src/vercel.js";
+export { default } from "../apps/api/src/vercel";
