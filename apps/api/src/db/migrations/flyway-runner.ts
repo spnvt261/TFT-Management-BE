@@ -112,7 +112,23 @@ interface VersionedMigration {
 }
 
 async function loadVersionedMigrations(directory: string): Promise<VersionedMigration[]> {
-  const entries = await readdir(directory, { withFileTypes: true });
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: string }).code === "ENOENT"
+    ) {
+      throw new Error(
+        `Migration directory not found: ${directory}. ` +
+          "If running on Vercel, ensure vercel.json includes apps/api/db/migrations/** in function includeFiles."
+      );
+    }
+    throw error;
+  }
   const migrations: VersionedMigration[] = [];
 
   for (const entry of entries) {
