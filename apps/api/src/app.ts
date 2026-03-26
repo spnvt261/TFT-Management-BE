@@ -19,6 +19,23 @@ import { createAuthPreHandler } from "./modules/auth/guard.js";
 import { registerAuthRoutes } from "./modules/auth/routes.js";
 import { AuthService } from "./modules/auth/auth-service.js";
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function matchOriginPattern(origin: string, pattern: string): boolean {
+  if (pattern === "*") {
+    return true;
+  }
+
+  if (!pattern.includes("*")) {
+    return origin === pattern;
+  }
+
+  const regex = new RegExp(`^${escapeRegex(pattern).replace(/\\\*/g, ".*")}$`);
+  return regex.test(origin);
+}
+
 export async function createApp(services: AppServices) {
   const app = Fastify({
     logger: {
@@ -26,12 +43,12 @@ export async function createApp(services: AppServices) {
     }
   });
 
-  const allowAllOrigins = env.app.corsAllowedOrigins.includes("*");
-  const allowedOrigins = new Set(env.app.corsAllowedOrigins);
-
   await app.register(cors, {
     origin: (origin, callback) => {
-      if (origin === undefined || allowAllOrigins || allowedOrigins.has(origin)) {
+      if (
+        origin === undefined ||
+        env.app.corsAllowedOrigins.some((pattern) => matchOriginPattern(origin, pattern))
+      ) {
         callback(null, true);
         return;
       }
