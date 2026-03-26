@@ -26,8 +26,18 @@ export async function createApp(services: AppServices) {
     }
   });
 
+  const allowAllOrigins = env.app.corsAllowedOrigins.includes("*");
+  const allowedOrigins = new Set(env.app.corsAllowedOrigins);
+
   await app.register(cors, {
-    origin: "*",
+    origin: (origin, callback) => {
+      if (origin === undefined || allowAllOrigins || allowedOrigins.has(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error("CORS origin not allowed"), false);
+    },
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
   });

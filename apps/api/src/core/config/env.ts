@@ -5,11 +5,19 @@ dotenv.config();
 
 const isVercelRuntime = process.env.VERCEL === "1";
 
+function parseCsv(value: string): string[] {
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   APP_HOST: z.string().default("0.0.0.0"),
   APP_PORT: z.coerce.number().int().positive().default(3000),
   LOG_LEVEL: z.string().default("info"),
+  CORS_ALLOWED_ORIGINS: z.string().default("*"),
   DEFAULT_GROUP_CODE: z.string().default("TFT_FRIENDS"),
 
   DB_URL: z.string().optional(),
@@ -35,6 +43,7 @@ const envSchema = z.object({
   FLYWAY_COMMAND: z.string().default("flyway"),
   FLYWAY_LOCATIONS: z.string().optional(),
 
+  ADMIN_ACCESS_CODE: z.string().default("admin123"),
   JWT_SECRET: z.string().default("tft2-internal-jwt-secret"),
   JWT_EXPIRES_IN: z.string().default("24h")
 });
@@ -46,7 +55,8 @@ export const env = {
   app: {
     host: parsed.APP_HOST,
     port: parsed.APP_PORT,
-    logLevel: parsed.LOG_LEVEL
+    logLevel: parsed.LOG_LEVEL,
+    corsAllowedOrigins: parseCsv(parsed.CORS_ALLOWED_ORIGINS)
   },
   defaultGroupCode: parsed.DEFAULT_GROUP_CODE,
   db: {
@@ -66,6 +76,7 @@ export const env = {
     locations: parsed.FLYWAY_LOCATIONS
   },
   auth: {
+    adminAccessCode: parsed.ADMIN_ACCESS_CODE,
     jwtSecret: parsed.JWT_SECRET,
     jwtExpiresIn: parsed.JWT_EXPIRES_IN
   }

@@ -1,6 +1,7 @@
 import { AppError, badRequest } from "../../core/errors/app-error.js";
+import { env } from "../../core/config/env.js";
 import type { RepositoryBundle } from "../../db/repositories/repository-factory.js";
-import { ADMIN_ACCESS_CODE, ADMIN_ROLE_CODE, USER_ROLE_CODE } from "./auth.constants.js";
+import { ADMIN_ROLE_CODE, USER_ROLE_CODE } from "./auth.constants.js";
 import type { JwtService } from "./jwt.service.js";
 import type { RoleCode } from "./auth.types.js";
 
@@ -23,7 +24,7 @@ export class AuthService {
       throw badRequest("AUTH_LOGIN_INVALID", "accessCode must not be empty");
     }
 
-    const roleCode: RoleCode = normalizedCode === ADMIN_ACCESS_CODE ? ADMIN_ROLE_CODE : USER_ROLE_CODE;
+    const roleCode: RoleCode = normalizedCode === env.auth.adminAccessCode ? ADMIN_ROLE_CODE : USER_ROLE_CODE;
     const role = await this.repositories.roles.findByCode(roleCode);
 
     if (!role) {
