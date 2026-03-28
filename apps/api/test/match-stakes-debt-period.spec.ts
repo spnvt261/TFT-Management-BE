@@ -64,7 +64,9 @@ function createFixture() {
       listMatchStakesPeriodEvents: vi.fn().mockResolvedValue([]),
       listMatchStakesPeriodEventImpacts: vi.fn().mockResolvedValue([]),
       createEvent: vi.fn(),
-      insertMatchStakesImpacts: vi.fn()
+      insertMatchStakesImpacts: vi.fn(),
+      getEventById: vi.fn(),
+      markEventReset: vi.fn()
     }
   } as any;
 
@@ -628,6 +630,327 @@ describe("match-stakes debt period service", () => {
         { playerId: "10000000-0000-4000-8000-000000000002", initNetVnd: -50000 }
       ]
     );
+  });
+
+  it("splits AFFECTS_DEBT advance across all selected participants including advancer", async () => {
+    const { service, txRepositories } = createFixture();
+    txRepositories.matchStakesDebt.getCurrentOpenPeriod.mockResolvedValue(openPeriod);
+    txRepositories.players.findActiveByIds.mockImplementation(async (_groupId: string, ids: string[]) =>
+      ids.map((id) => ({ id, displayName: `Player-${id.slice(-4)}` }))
+    );
+    txRepositories.matchStakesDebt.listPeriodPlayerAggregates
+      .mockResolvedValueOnce([
+        {
+          playerId: "10000000-0000-4000-8000-000000000001",
+          playerName: "Player-0001",
+          totalMatches: 0,
+          initNetVnd: 0,
+          accruedNetVnd: 0,
+          settledPaidVnd: 0,
+          settledReceivedVnd: 0
+        },
+        {
+          playerId: "10000000-0000-4000-8000-000000000002",
+          playerName: "Player-0002",
+          totalMatches: 0,
+          initNetVnd: 0,
+          accruedNetVnd: 0,
+          settledPaidVnd: 0,
+          settledReceivedVnd: 0
+        },
+        {
+          playerId: "10000000-0000-4000-8000-000000000003",
+          playerName: "Player-0003",
+          totalMatches: 0,
+          initNetVnd: 0,
+          accruedNetVnd: 0,
+          settledPaidVnd: 0,
+          settledReceivedVnd: 0
+        },
+        {
+          playerId: "10000000-0000-4000-8000-000000000004",
+          playerName: "Player-0004",
+          totalMatches: 0,
+          initNetVnd: 0,
+          accruedNetVnd: 0,
+          settledPaidVnd: 0,
+          settledReceivedVnd: 0
+        }
+      ])
+      .mockResolvedValueOnce([
+        {
+          playerId: "10000000-0000-4000-8000-000000000001",
+          playerName: "Player-0001",
+          totalMatches: 0,
+          initNetVnd: 0,
+          accruedNetVnd: 37500,
+          settledPaidVnd: 0,
+          settledReceivedVnd: 0
+        },
+        {
+          playerId: "10000000-0000-4000-8000-000000000002",
+          playerName: "Player-0002",
+          totalMatches: 0,
+          initNetVnd: 0,
+          accruedNetVnd: -12500,
+          settledPaidVnd: 0,
+          settledReceivedVnd: 0
+        },
+        {
+          playerId: "10000000-0000-4000-8000-000000000003",
+          playerName: "Player-0003",
+          totalMatches: 0,
+          initNetVnd: 0,
+          accruedNetVnd: -12500,
+          settledPaidVnd: 0,
+          settledReceivedVnd: 0
+        },
+        {
+          playerId: "10000000-0000-4000-8000-000000000004",
+          playerName: "Player-0004",
+          totalMatches: 0,
+          initNetVnd: 0,
+          accruedNetVnd: -12500,
+          settledPaidVnd: 0,
+          settledReceivedVnd: 0
+        }
+      ]);
+    txRepositories.matchStakesDebt.countNonVoidedMatchesInPeriod.mockResolvedValue(0);
+    txRepositories.historyEvents.createEvent.mockImplementation(async (input: any) => ({
+      id: "event-1",
+      eventType: input.eventType,
+      eventStatus: "ACTIVE",
+      resetAt: null,
+      resetReason: null,
+      postedAt: input.postedAt,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      note: input.note,
+      amountVnd: input.amountVnd,
+      playerId: input.playerId,
+      secondaryPlayerId: input.secondaryPlayerId,
+      debtPeriodId: input.debtPeriodId,
+      ledgerBatchId: input.ledgerBatchId,
+      balanceBeforeVnd: input.balanceBeforeVnd,
+      balanceAfterVnd: input.balanceAfterVnd,
+      outstandingBeforeVnd: input.outstandingBeforeVnd,
+      outstandingAfterVnd: input.outstandingAfterVnd,
+      metadataJson: input.metadataJson
+    }));
+    txRepositories.historyEvents.insertMatchStakesImpacts.mockResolvedValue(undefined);
+
+    const result = await service.createHistoryEvent({
+      eventType: "MATCH_STAKES_ADVANCE",
+      playerId: "10000000-0000-4000-8000-000000000001",
+      amountVnd: 50000,
+      impactMode: "AFFECTS_DEBT",
+      participantPlayerIds: [
+        "10000000-0000-4000-8000-000000000001",
+        "10000000-0000-4000-8000-000000000002",
+        "10000000-0000-4000-8000-000000000003",
+        "10000000-0000-4000-8000-000000000004"
+      ]
+    });
+
+    expect(txRepositories.historyEvents.insertMatchStakesImpacts).toHaveBeenCalledWith(
+      "event-1",
+      "group-1",
+      openPeriod.id,
+      [
+        { playerId: "10000000-0000-4000-8000-000000000001", netDeltaVnd: 37500 },
+        { playerId: "10000000-0000-4000-8000-000000000002", netDeltaVnd: -12500 },
+        { playerId: "10000000-0000-4000-8000-000000000003", netDeltaVnd: -12500 },
+        { playerId: "10000000-0000-4000-8000-000000000004", netDeltaVnd: -12500 }
+      ]
+    );
+    expect(result.summary.totalOutstandingReceiveVnd).toBe(37500);
+    expect(result.summary.totalOutstandingPayVnd).toBe(37500);
+  });
+
+  it("handles deterministic remainder allocation for 3 participants", async () => {
+    const { service, txRepositories } = createFixture();
+    txRepositories.matchStakesDebt.getCurrentOpenPeriod.mockResolvedValue(openPeriod);
+    txRepositories.players.findActiveByIds.mockImplementation(async (_groupId: string, ids: string[]) =>
+      ids.map((id) => ({ id, displayName: `Player-${id.slice(-4)}` }))
+    );
+    txRepositories.matchStakesDebt.listPeriodPlayerAggregates.mockResolvedValue([
+      {
+        playerId: "10000000-0000-4000-8000-000000000001",
+        playerName: "Player-0001",
+        totalMatches: 0,
+        initNetVnd: 0,
+        accruedNetVnd: 0,
+        settledPaidVnd: 0,
+        settledReceivedVnd: 0
+      }
+    ]);
+    txRepositories.matchStakesDebt.countNonVoidedMatchesInPeriod.mockResolvedValue(0);
+    txRepositories.historyEvents.createEvent.mockImplementation(async (input: any) => ({
+      id: "event-2",
+      eventType: input.eventType,
+      eventStatus: "ACTIVE",
+      resetAt: null,
+      resetReason: null,
+      postedAt: input.postedAt,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      note: input.note,
+      amountVnd: input.amountVnd,
+      playerId: input.playerId,
+      secondaryPlayerId: input.secondaryPlayerId,
+      debtPeriodId: input.debtPeriodId,
+      ledgerBatchId: input.ledgerBatchId,
+      balanceBeforeVnd: input.balanceBeforeVnd,
+      balanceAfterVnd: input.balanceAfterVnd,
+      outstandingBeforeVnd: input.outstandingBeforeVnd,
+      outstandingAfterVnd: input.outstandingAfterVnd,
+      metadataJson: input.metadataJson
+    }));
+    txRepositories.historyEvents.insertMatchStakesImpacts.mockResolvedValue(undefined);
+
+    await service.createHistoryEvent({
+      eventType: "MATCH_STAKES_ADVANCE",
+      playerId: "10000000-0000-4000-8000-000000000001",
+      amountVnd: 50000,
+      impactMode: "AFFECTS_DEBT",
+      participantPlayerIds: [
+        "10000000-0000-4000-8000-000000000001",
+        "10000000-0000-4000-8000-000000000002",
+        "10000000-0000-4000-8000-000000000003"
+      ]
+    });
+
+    const insertedLines = txRepositories.historyEvents.insertMatchStakesImpacts.mock.calls[0]?.[3] ?? [];
+    expect(insertedLines).toEqual([
+      { playerId: "10000000-0000-4000-8000-000000000001", netDeltaVnd: 33333 },
+      { playerId: "10000000-0000-4000-8000-000000000002", netDeltaVnd: -16667 },
+      { playerId: "10000000-0000-4000-8000-000000000003", netDeltaVnd: -16666 }
+    ]);
+    expect(insertedLines.reduce((sum: number, line: { netDeltaVnd: number }) => sum + line.netDeltaVnd, 0)).toBe(0);
+  });
+
+  it("rejects advance when advancer is not in participantPlayerIds", async () => {
+    const { service, txRepositories } = createFixture();
+    txRepositories.matchStakesDebt.getCurrentOpenPeriod.mockResolvedValue(openPeriod);
+    txRepositories.players.findActiveByIds.mockResolvedValue([
+      { id: "10000000-0000-4000-8000-000000000001", displayName: "Player-0001" }
+    ]);
+
+    await expect(
+      service.createHistoryEvent({
+        eventType: "MATCH_STAKES_ADVANCE",
+        playerId: "10000000-0000-4000-8000-000000000001",
+        amountVnd: 50000,
+        impactMode: "AFFECTS_DEBT",
+        participantPlayerIds: [
+          "10000000-0000-4000-8000-000000000002",
+          "10000000-0000-4000-8000-000000000003"
+        ]
+      })
+    ).rejects.toMatchObject({
+      code: "MATCH_STAKES_ADVANCE_ADVANCER_NOT_IN_PARTICIPANTS"
+    });
+  });
+
+  it("resets advance event and returns updated event status with rebuilt summary", async () => {
+    const { service, txRepositories } = createFixture();
+    txRepositories.historyEvents.getEventById.mockResolvedValue({
+      id: "event-reset-1",
+      groupId: "group-1",
+      module: "MATCH_STAKES",
+      eventType: "MATCH_STAKES_ADVANCE",
+      eventStatus: "ACTIVE",
+      resetAt: null,
+      resetReason: null,
+      postedAt: "2026-01-01T00:00:00.000Z",
+      note: "advance",
+      amountVnd: 50000,
+      matchStakesImpactMode: "AFFECTS_DEBT",
+      affectsDebt: true,
+      playerId: "10000000-0000-4000-8000-000000000001",
+      secondaryPlayerId: null,
+      debtPeriodId: openPeriod.id,
+      matchId: null,
+      ledgerBatchId: null,
+      balanceBeforeVnd: null,
+      balanceAfterVnd: null,
+      outstandingBeforeVnd: 0,
+      outstandingAfterVnd: 37500,
+      metadataJson: {
+        participantPlayerIds: [
+          "10000000-0000-4000-8000-000000000001",
+          "10000000-0000-4000-8000-000000000002",
+          "10000000-0000-4000-8000-000000000003",
+          "10000000-0000-4000-8000-000000000004"
+        ]
+      },
+      createdByRoleCode: "ADMIN",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    });
+    txRepositories.matchStakesDebt.getPeriodById.mockResolvedValue(openPeriod);
+    txRepositories.historyEvents.markEventReset.mockResolvedValue({
+      id: "event-reset-1",
+      groupId: "group-1",
+      module: "MATCH_STAKES",
+      eventType: "MATCH_STAKES_ADVANCE",
+      eventStatus: "RESET",
+      resetAt: "2026-01-02T00:00:00.000Z",
+      resetReason: "wrong record",
+      postedAt: "2026-01-01T00:00:00.000Z",
+      note: "advance",
+      amountVnd: 50000,
+      matchStakesImpactMode: "AFFECTS_DEBT",
+      affectsDebt: true,
+      playerId: "10000000-0000-4000-8000-000000000001",
+      secondaryPlayerId: null,
+      debtPeriodId: openPeriod.id,
+      matchId: null,
+      ledgerBatchId: null,
+      balanceBeforeVnd: null,
+      balanceAfterVnd: null,
+      outstandingBeforeVnd: 0,
+      outstandingAfterVnd: 37500,
+      metadataJson: {
+        participantPlayerIds: [
+          "10000000-0000-4000-8000-000000000001",
+          "10000000-0000-4000-8000-000000000002",
+          "10000000-0000-4000-8000-000000000003",
+          "10000000-0000-4000-8000-000000000004"
+        ]
+      },
+      createdByRoleCode: "ADMIN",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-02T00:00:00.000Z"
+    });
+    txRepositories.players.findActiveByIds.mockResolvedValue([
+      { id: "10000000-0000-4000-8000-000000000001", displayName: "Player-0001" },
+      { id: "10000000-0000-4000-8000-000000000002", displayName: "Player-0002" },
+      { id: "10000000-0000-4000-8000-000000000003", displayName: "Player-0003" },
+      { id: "10000000-0000-4000-8000-000000000004", displayName: "Player-0004" }
+    ]);
+    txRepositories.matchStakesDebt.listPeriodPlayerAggregates.mockResolvedValue([
+      {
+        playerId: "10000000-0000-4000-8000-000000000001",
+        playerName: "Player-0001",
+        totalMatches: 0,
+        initNetVnd: 0,
+        accruedNetVnd: 0,
+        settledPaidVnd: 0,
+        settledReceivedVnd: 0
+      }
+    ]);
+    txRepositories.matchStakesDebt.countNonVoidedMatchesInPeriod.mockResolvedValue(0);
+
+    const result = await service.resetHistoryEvent("event-reset-1", { reason: "wrong record", resetByRoleCode: "ADMIN" });
+
+    expect(txRepositories.historyEvents.markEventReset).toHaveBeenCalledWith({
+      groupId: "group-1",
+      eventId: "event-reset-1",
+      resetReason: "wrong record"
+    });
+    expect(result.event.eventStatus).toBe("RESET");
+    expect(result.event.resetReason).toBe("wrong record");
+    expect(result.summary.totalOutstandingReceiveVnd).toBe(0);
+    expect(result.summary.totalOutstandingPayVnd).toBe(0);
   });
 });
 

@@ -20,6 +20,9 @@ async function buildAppWithHistoryEventSpy() {
       id: EVENT_ID,
       module: "MATCH_STAKES" as const,
       itemType: input.eventType === "MATCH_STAKES_ADVANCE" ? "ADVANCE" : "NOTE",
+      eventStatus: "ACTIVE" as const,
+      resetAt: null,
+      resetReason: null,
       postedAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
       title: input.eventType === "MATCH_STAKES_ADVANCE" ? "Advance" : "Note",
@@ -41,8 +44,41 @@ async function buildAppWithHistoryEventSpy() {
       metadata: {}
     }
   }));
+  const resetHistoryEvent = vi.fn(async () => ({
+    period: current.period,
+    summary: current.summary,
+    players: current.players,
+    event: {
+      id: EVENT_ID,
+      module: "MATCH_STAKES" as const,
+      itemType: "ADVANCE",
+      eventStatus: "RESET" as const,
+      resetAt: new Date().toISOString(),
+      resetReason: "mistake",
+      postedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      title: "Advance",
+      description: null,
+      amountVnd: 50000,
+      player: {
+        id: PLAYER_ID,
+        name: "An"
+      },
+      secondaryPlayer: null,
+      matchId: null,
+      debtPeriodId: current.period.id,
+      ledgerBatchId: null,
+      balanceBeforeVnd: 0,
+      balanceAfterVnd: 50000,
+      outstandingBeforeVnd: 0,
+      outstandingAfterVnd: 50000,
+      note: null,
+      metadata: {}
+    }
+  }));
 
   services.matchStakes.createHistoryEvent = createHistoryEvent as unknown as typeof services.matchStakes.createHistoryEvent;
+  services.matchStakes.resetHistoryEvent = resetHistoryEvent as unknown as typeof services.matchStakes.resetHistoryEvent;
 
   const app = await createApp(services);
   const headers = await loginAndGetAuthHeaders(app);
@@ -51,7 +87,8 @@ async function buildAppWithHistoryEventSpy() {
     app,
     headers,
     periodId: current.period.id,
-    createHistoryEvent
+    createHistoryEvent,
+    resetHistoryEvent
   };
 }
 
@@ -79,6 +116,11 @@ describe("Match stakes history event route", () => {
         amountVnd: 50000,
         debtPeriodId: setup.periodId,
         impactMode: "AFFECTS_DEBT",
+        participantPlayerIds: [
+          "10000000-0000-4000-8000-000000000001",
+          "10000000-0000-4000-8000-000000000002",
+          "10000000-0000-4000-8000-000000000003"
+        ],
         note: "ok"
       }
     });
@@ -148,5 +190,87 @@ describe("Match stakes history event route", () => {
       }
     });
     expect(setup.createHistoryEvent).not.toHaveBeenCalled();
+  });
+
+  it("rejects AFFECTS_DEBT advance without participants", async () => {
+    const setup = await buildAppWithHistoryEventSpy();
+    app = setup.app;
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/match-stakes/history-events",
+      headers: setup.headers,
+      payload: {
+        eventType: "MATCH_STAKES_ADVANCE",
+        playerId: PLAYER_ID,
+        amountVnd: 50000,
+        debtPeriodId: setup.periodId,
+        impactMode: "AFFECTS_DEBT",
+        note: "missing participants"
+      }
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      success: false,
+      error: {
+        code: "VALIDATION_ERROR"
+      }
+    });
+    expect(setup.createHistoryEvent).not.toHaveBeenCalled();
+  });
+
+  it("accepts legacy beneficiaryPlayerIds payload for backward compatibility", async () => {
+    const setup = await buildAppWithHistoryEventSpy();
+    app = setup.app;
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/match-stakes/history-events",
+      headers: setup.headers,
+      payload: {
+        eventType: "MATCH_STAKES_ADVANCE",
+        playerId: PLAYER_ID,
+        amountVnd: 50000,
+        debtPeriodId: setup.periodId,
+        impactMode: "AFFECTS_DEBT",
+        beneficiaryPlayerIds: [
+          "10000000-0000-4000-8000-000000000002",
+          "10000000-0000-4000-8000-000000000003"
+        ]
+      }
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(setup.createHistoryEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        beneficiaryPlayerIds: [
+          "10000000-0000-4000-8000-000000000002",
+          "10000000-0000-4000-8000-000000000003"
+        ]
+      })
+    );
+  });
+
+  it("calls reset history event endpoint", async () => {
+    const setup = await buildAppWithHistoryEventSpy();
+    app = setup.app;
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/match-stakes/history-events/${EVENT_ID}/reset`,
+      headers: setup.headers,
+      payload: {
+        reason: "wrong advance"
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(setup.resetHistoryEvent).toHaveBeenCalledWith(
+      EVENT_ID,
+      expect.objectContaining({
+        reason: "wrong advance"
+      })
+    );
   });
 });

@@ -1,4 +1,4 @@
-import type { HistoryEventType, MatchStakesImpactMode, ModuleType } from "../../domain/models/enums.js";
+import type { HistoryEventType, MatchStakesImpactMode, ModuleHistoryEventStatus, ModuleType } from "../../domain/models/enums.js";
 import type { ModuleHistoryEventRecord } from "../../domain/models/records.js";
 import type { Queryable } from "../postgres/transaction.js";
 
@@ -7,6 +7,9 @@ interface ModuleHistoryEventRow {
   group_id: string;
   module: ModuleType;
   event_type: HistoryEventType;
+  event_status: ModuleHistoryEventStatus;
+  reset_at: string | null;
+  reset_reason: string | null;
   posted_at: string;
   note: string | null;
   amount_vnd: number | null;
@@ -33,6 +36,9 @@ function mapHistoryEvent(row: ModuleHistoryEventRow): ModuleHistoryEventRecord {
     groupId: row.group_id,
     module: row.module,
     eventType: row.event_type,
+    eventStatus: row.event_status,
+    resetAt: row.reset_at,
+    resetReason: row.reset_reason,
     postedAt: row.posted_at,
     note: row.note,
     amountVnd: row.amount_vnd,
@@ -84,6 +90,9 @@ export interface MatchStakesHistoryImpactInput {
 export interface MatchStakesPeriodHistoryEventRecord {
   id: string;
   eventType: HistoryEventType;
+  eventStatus: ModuleHistoryEventStatus;
+  resetAt: string | null;
+  resetReason: string | null;
   postedAt: string;
   createdAt: string;
   amountVnd: number | null;
@@ -108,6 +117,9 @@ export interface UnifiedHistoryFeedItemRecord {
   id: string;
   module: ModuleType;
   itemType: string;
+  eventStatus: ModuleHistoryEventStatus | null;
+  resetAt: string | null;
+  resetReason: string | null;
   postedAt: string;
   createdAt: string;
   title: string;
@@ -132,6 +144,9 @@ interface UnifiedHistoryFeedRow {
   id: string;
   module: ModuleType;
   item_type: string;
+  event_status: ModuleHistoryEventStatus | null;
+  reset_at: string | null;
+  reset_reason: string | null;
   posted_at: string;
   created_at: string;
   title: string;
@@ -158,6 +173,9 @@ function mapUnifiedHistoryItem(row: UnifiedHistoryFeedRow): UnifiedHistoryFeedIt
     id: row.id,
     module: row.module,
     itemType: row.item_type,
+    eventStatus: row.event_status,
+    resetAt: row.reset_at,
+    resetReason: row.reset_reason,
     postedAt: row.posted_at,
     createdAt: row.created_at,
     title: row.title,
@@ -216,6 +234,9 @@ export class HistoryEventRepository {
         group_id,
         module,
         event_type,
+        event_status,
+        reset_at,
+        reset_reason,
         posted_at,
         note,
         amount_vnd,
@@ -261,6 +282,97 @@ export class HistoryEventRepository {
     return mapHistoryEvent(result.rows[0]!);
   }
 
+  public async getEventById(groupId: string, eventId: string): Promise<ModuleHistoryEventRecord | null> {
+    const result = await this.db.query<ModuleHistoryEventRow>(
+      `
+      SELECT
+        id,
+        group_id,
+        module,
+        event_type,
+        event_status,
+        reset_at,
+        reset_reason,
+        posted_at,
+        note,
+        amount_vnd,
+        match_stakes_impact_mode,
+        affects_debt,
+        player_id,
+        secondary_player_id,
+        debt_period_id,
+        match_id,
+        ledger_batch_id,
+        balance_before_vnd,
+        balance_after_vnd,
+        outstanding_before_vnd,
+        outstanding_after_vnd,
+        metadata_json,
+        created_by_role_code,
+        created_at,
+        updated_at
+      FROM module_history_events
+      WHERE group_id = $1
+        AND id = $2
+      LIMIT 1
+      `,
+      [groupId, eventId]
+    );
+
+    const row = result.rows[0];
+    return row ? mapHistoryEvent(row) : null;
+  }
+
+  public async markEventReset(input: {
+    groupId: string;
+    eventId: string;
+    resetReason: string | null;
+  }): Promise<ModuleHistoryEventRecord | null> {
+    const result = await this.db.query<ModuleHistoryEventRow>(
+      `
+      UPDATE module_history_events
+      SET
+        event_status = 'RESET',
+        reset_at = now(),
+        reset_reason = $3,
+        updated_at = now()
+      WHERE group_id = $1
+        AND id = $2
+        AND event_status = 'ACTIVE'
+      RETURNING
+        id,
+        group_id,
+        module,
+        event_type,
+        event_status,
+        reset_at,
+        reset_reason,
+        posted_at,
+        note,
+        amount_vnd,
+        match_stakes_impact_mode,
+        affects_debt,
+        player_id,
+        secondary_player_id,
+        debt_period_id,
+        match_id,
+        ledger_batch_id,
+        balance_before_vnd,
+        balance_after_vnd,
+        outstanding_before_vnd,
+        outstanding_after_vnd,
+        metadata_json,
+        created_by_role_code,
+        created_at,
+        updated_at
+      `,
+      [input.groupId, input.eventId, input.resetReason]
+    );
+
+    const row = result.rows[0];
+    return row ? mapHistoryEvent(row) : null;
+  }
+
   public async insertMatchStakesImpacts(
     historyEventId: string,
     groupId: string,
@@ -297,6 +409,9 @@ export class HistoryEventRepository {
     const result = await this.db.query<{
       id: string;
       event_type: HistoryEventType;
+      event_status: ModuleHistoryEventStatus;
+      reset_at: string | null;
+      reset_reason: string | null;
       posted_at: string;
       created_at: string;
       amount_vnd: number | null;
@@ -313,6 +428,9 @@ export class HistoryEventRepository {
       SELECT
         e.id,
         e.event_type,
+        e.event_status,
+        e.reset_at,
+        e.reset_reason,
         e.posted_at,
         e.created_at,
         e.amount_vnd,
@@ -337,6 +455,9 @@ export class HistoryEventRepository {
     return result.rows.map((row) => ({
       id: row.id,
       eventType: row.event_type,
+      eventStatus: row.event_status,
+      resetAt: row.reset_at,
+      resetReason: row.reset_reason,
       postedAt: row.posted_at,
       createdAt: row.created_at,
       amountVnd: row.amount_vnd,
@@ -369,8 +490,10 @@ export class HistoryEventRepository {
         p.display_name AS player_name,
         i.net_delta_vnd
       FROM match_stakes_history_event_player_impacts i
+      INNER JOIN module_history_events e ON e.id = i.history_event_id
       INNER JOIN players p ON p.id = i.player_id
       WHERE i.history_event_id = ANY($1::uuid[])
+        AND e.event_status = 'ACTIVE'
       ORDER BY i.created_at ASC, i.player_id ASC
       `,
       [eventIds]
@@ -465,6 +588,9 @@ export class HistoryEventRepository {
           m.id::text AS id,
           m.module,
           'MATCH'::text AS item_type,
+          NULL::module_history_event_status AS event_status,
+          NULL::timestamptz AS reset_at,
+          NULL::text AS reset_reason,
           m.played_at AS posted_at,
           m.created_at AS created_at,
           CONCAT('Match #', COALESCE(m.period_match_no::text, '?')) AS title,
@@ -505,6 +631,9 @@ export class HistoryEventRepository {
           s.id::text AS id,
           'MATCH_STAKES'::module_type AS module,
           'DEBT_SETTLEMENT'::text AS item_type,
+          NULL::module_history_event_status AS event_status,
+          NULL::timestamptz AS reset_at,
+          NULL::text AS reset_reason,
           s.posted_at,
           s.created_at,
           'Debt settlement'::text AS title,
@@ -545,6 +674,9 @@ export class HistoryEventRepository {
             WHEN e.event_type = 'MATCH_STAKES_NOTE' THEN 'NOTE'
             ELSE 'NOTE'
           END::text AS item_type,
+          e.event_status,
+          e.reset_at,
+          e.reset_reason,
           e.posted_at,
           e.created_at,
           CASE
@@ -570,6 +702,9 @@ export class HistoryEventRepository {
             'eventType', e.event_type,
             'affectsDebt', e.affects_debt,
             'impactMode', e.match_stakes_impact_mode,
+            'eventStatus', e.event_status,
+            'resetAt', e.reset_at,
+            'resetReason', e.reset_reason,
             'details', e.metadata_json
           ) AS metadata_json
         FROM module_history_events e
@@ -586,6 +721,9 @@ export class HistoryEventRepository {
         id,
         module,
         item_type,
+        event_status,
+        reset_at,
+        reset_reason,
         posted_at,
         created_at,
         title,
@@ -692,6 +830,9 @@ export class HistoryEventRepository {
           m.id::text AS id,
           m.module,
           'MATCH'::text AS item_type,
+          NULL::module_history_event_status AS event_status,
+          NULL::timestamptz AS reset_at,
+          NULL::text AS reset_reason,
           m.played_at AS posted_at,
           m.created_at AS created_at,
           'Match settlement'::text AS title,
@@ -730,6 +871,9 @@ export class HistoryEventRepository {
           e.id::text AS id,
           'GROUP_FUND'::module_type AS module,
           'MANUAL_TRANSACTION'::text AS item_type,
+          NULL::module_history_event_status AS event_status,
+          NULL::timestamptz AS reset_at,
+          NULL::text AS reset_reason,
           b.posted_at,
           e.created_at,
           CASE ${transactionTypeCase}
@@ -778,6 +922,9 @@ export class HistoryEventRepository {
             WHEN e.event_type = 'GROUP_FUND_CONTRIBUTION' THEN 'CONTRIBUTION'
             ELSE 'NOTE'
           END::text AS item_type,
+          e.event_status,
+          e.reset_at,
+          e.reset_reason,
           e.posted_at,
           e.created_at,
           CASE
@@ -803,6 +950,9 @@ export class HistoryEventRepository {
           e.note,
           jsonb_build_object(
             'eventType', e.event_type,
+            'eventStatus', e.event_status,
+            'resetAt', e.reset_at,
+            'resetReason', e.reset_reason,
             'details', e.metadata_json
           ) AS metadata_json
         FROM module_history_events e
@@ -819,6 +969,9 @@ export class HistoryEventRepository {
         id,
         module,
         item_type,
+        event_status,
+        reset_at,
+        reset_reason,
         posted_at,
         created_at,
         title,
@@ -869,6 +1022,7 @@ export class HistoryEventRepository {
     const conditions: string[] = [
       "e.group_id = $1",
       "e.module = 'GROUP_FUND'",
+      "e.event_status = 'ACTIVE'",
       "e.event_type IN ('GROUP_FUND_ADVANCE', 'GROUP_FUND_CONTRIBUTION')"
     ];
 

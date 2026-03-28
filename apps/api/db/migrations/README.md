@@ -22,6 +22,7 @@ This project uses Flyway as the only schema source of truth.
 - `V8__add_match_stakes_carry_forward_and_period_match_no.sql`
 - `V9__add_roles_table.sql`
 - `V10__add_module_history_events.sql`
+- `V11__add_match_stakes_history_event_reset_status.sql`
 
 ## Operational Notes
 

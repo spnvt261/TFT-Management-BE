@@ -4,7 +4,7 @@ import { uuidSchema } from "../../core/validation/uuid.js";
 import { ok } from "../../core/types/api.js";
 import type { AppServices } from "../../core/types/container.js";
 import { errorResponseSchemas, paginationMetaSchema, successResponseSchema, toSwaggerSchema } from "../../core/docs/swagger.js";
-import { debtPeriodStatusSchema, matchStakesImpactModeSchema } from "../../domain/models/enums.js";
+import { debtPeriodStatusSchema, matchStakesImpactModeSchema, moduleHistoryEventStatusSchema } from "../../domain/models/enums.js";
 
 const querySchema = z.object({
   playerId: uuidSchema.optional(),
@@ -16,6 +16,7 @@ const querySchema = z.object({
 
 const summaryQuerySchema = z.object({ from: z.string().datetime().optional(), to: z.string().datetime().optional() });
 const periodIdParamSchema = z.object({ periodId: uuidSchema });
+const eventIdParamSchema = z.object({ eventId: uuidSchema });
 
 const createDebtPeriodBodySchema = z.object({
   title: z.string().max(150).nullable().optional(),
@@ -71,6 +72,13 @@ const closeDebtPeriodBodySchema = z
     });
   });
 
+const resetHistoryEventBodySchema = z.preprocess(
+  (value) => value ?? {},
+  z.object({
+    reason: z.string().max(4000).nullable().optional()
+  })
+);
+
 const historyItemTypeSchema = z.enum(["MATCH", "DEBT_SETTLEMENT", "ADVANCE", "NOTE"]);
 
 const historyItemTypesQuerySchema = z
@@ -123,6 +131,7 @@ const createMatchStakesHistoryEventRouteBodySchema = z
     amountVnd: z.union([z.number(), z.string()]).optional(),
     note: z.union([z.string(), z.null()]).optional(),
     impactMode: z.union([matchStakesImpactModeSchema, z.literal("INFORMATION_ONLY")]).optional(),
+    participantPlayerIds: z.array(uuidSchema).min(1).optional(),
     beneficiaryPlayerIds: z.array(uuidSchema).min(1).optional(),
     debtPeriodId: uuidSchema.optional()
   })
@@ -137,6 +146,7 @@ const createMatchStakesHistoryEventBodySchema = z
       amountVnd: z.coerce.number().int().positive(),
       note: z.string().max(4000).nullable().optional(),
       impactMode: matchStakesImpactModeInputSchema.optional(),
+      participantPlayerIds: z.array(uuidSchema).min(1).optional(),
       beneficiaryPlayerIds: z.array(uuidSchema).min(1).optional(),
       debtPeriodId: uuidSchema.optional()
     }),
@@ -150,12 +160,32 @@ const createMatchStakesHistoryEventBodySchema = z
   ])
   .superRefine((value, context) => {
     if (value.eventType === "MATCH_STAKES_ADVANCE") {
-      const unique = new Set(value.beneficiaryPlayerIds ?? []);
-      if ((value.beneficiaryPlayerIds?.length ?? 0) !== unique.size) {
+      const participantUnique = new Set(value.participantPlayerIds ?? []);
+      if ((value.participantPlayerIds?.length ?? 0) !== participantUnique.size) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["participantPlayerIds"],
+          message: "participantPlayerIds must not contain duplicates"
+        });
+      }
+
+      const beneficiaryUnique = new Set(value.beneficiaryPlayerIds ?? []);
+      if ((value.beneficiaryPlayerIds?.length ?? 0) !== beneficiaryUnique.size) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["beneficiaryPlayerIds"],
           message: "beneficiaryPlayerIds must not contain duplicates"
+        });
+      }
+
+      const impactMode = value.impactMode ?? "AFFECTS_DEBT";
+      const hasParticipants = (value.participantPlayerIds?.length ?? 0) > 0;
+      const hasLegacyBeneficiaries = (value.beneficiaryPlayerIds?.length ?? 0) > 0;
+      if (impactMode === "AFFECTS_DEBT" && !hasParticipants && !hasLegacyBeneficiaries) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["participantPlayerIds"],
+          message: "participantPlayerIds is required when impactMode is AFFECTS_DEBT"
         });
       }
     }
@@ -322,6 +352,9 @@ const unifiedHistoryItemSchema = z.object({
   id: uuidSchema,
   module: z.literal("MATCH_STAKES"),
   itemType: z.string(),
+  eventStatus: moduleHistoryEventStatusSchema.nullable(),
+  resetAt: z.string().nullable(),
+  resetReason: z.string().nullable(),
   postedAt: z.string(),
   createdAt: z.string(),
   title: z.string(),
@@ -597,6 +630,32 @@ export async function registerMatchStakesRoutes(app: FastifyInstance, services: 
 
       reply.status(201);
       return ok(created);
+    }
+  );
+
+  app.post(
+    "/match-stakes/history-events/:eventId/reset",
+    {
+      schema: {
+        tags: ["Match Stakes"],
+        summary: "Reset an existing match-stakes advance history event without hard deleting it",
+        params: toSwaggerSchema(eventIdParamSchema),
+        body: toSwaggerSchema(resetHistoryEventBodySchema),
+        response: {
+          200: successResponseSchema(createMatchStakesHistoryEventResponseSchema),
+          ...errorResponseSchemas
+        }
+      }
+    },
+    async (request) => {
+      const params = eventIdParamSchema.parse(request.params);
+      const body = resetHistoryEventBodySchema.parse(request.body);
+      return ok(
+        await services.matchStakes.resetHistoryEvent(params.eventId, {
+          reason: body.reason,
+          resetByRoleCode: request.authUser?.roleCode ?? null
+        })
+      );
     }
   );
 

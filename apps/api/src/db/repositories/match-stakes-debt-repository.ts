@@ -327,8 +327,10 @@ export class MatchStakesDebtRepository {
           i.player_id,
           COALESCE(SUM(i.net_delta_vnd), 0)::bigint AS event_net_vnd
         FROM match_stakes_history_event_player_impacts i
+        INNER JOIN module_history_events e ON e.id = i.history_event_id
         WHERE i.group_id = $1
           AND i.debt_period_id = $2
+          AND e.event_status = 'ACTIVE'
         GROUP BY i.player_id
       ),
       activity_players AS (

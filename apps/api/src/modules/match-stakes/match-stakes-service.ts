@@ -58,6 +58,9 @@ interface MatchStakesHistoryItem {
   id: string;
   module: "MATCH_STAKES";
   itemType: string;
+  eventStatus: "ACTIVE" | "RESET" | null;
+  resetAt: string | null;
+  resetReason: string | null;
   postedAt: string;
   createdAt: string;
   title: string;
@@ -142,6 +145,9 @@ function sortTimelineRows(rows: DebtPeriodTimelinePlayerRowItem[]): DebtPeriodTi
 function toMatchStakesHistoryItem(input: {
   id: string;
   itemType: string;
+  eventStatus: "ACTIVE" | "RESET" | null;
+  resetAt: string | null;
+  resetReason: string | null;
   postedAt: string;
   createdAt: string;
   title: string;
@@ -165,6 +171,9 @@ function toMatchStakesHistoryItem(input: {
     id: input.id,
     module: "MATCH_STAKES",
     itemType: input.itemType,
+    eventStatus: input.eventStatus,
+    resetAt: input.resetAt,
+    resetReason: input.resetReason,
     postedAt: input.postedAt,
     createdAt: input.createdAt,
     title: input.title,
@@ -325,6 +334,9 @@ export class MatchStakesService {
         toMatchStakesHistoryItem({
           id: item.id,
           itemType: item.itemType,
+          eventStatus: item.eventStatus,
+          resetAt: item.resetAt,
+          resetReason: item.resetReason,
           postedAt: item.postedAt,
           createdAt: item.createdAt,
           title: item.title,
@@ -520,7 +532,7 @@ export class MatchStakesService {
         playedAt: event?.postedAt ?? entry.postedAt,
         matchNo: null,
         participantCount: null,
-        status: null,
+        status: event?.eventStatus ?? null,
         amountVnd: event?.amountVnd ?? null,
         note: event?.note ?? null,
         affectsDebt: event?.affectsDebt ?? null,
@@ -574,6 +586,7 @@ export class MatchStakesService {
     playerId?: string;
     amountVnd?: number;
     impactMode?: MatchStakesImpactMode;
+    participantPlayerIds?: string[];
     beneficiaryPlayerIds?: string[];
     debtPeriodId?: string;
     createdByRoleCode?: string | null;
@@ -717,29 +730,43 @@ export class MatchStakesService {
         };
       }
 
-      const activePlayers = await this.listAllActivePlayers(txRepositories);
-      const beneficiaryPlayerIds =
-        input.beneficiaryPlayerIds && input.beneficiaryPlayerIds.length > 0
-          ? [...new Set(input.beneficiaryPlayerIds)]
-          : activePlayers.filter((player) => player.id !== advancerPlayerId).map((player) => player.id);
+      const legacyBeneficiaryPlayerIds =
+        input.beneficiaryPlayerIds && input.beneficiaryPlayerIds.length > 0 ? [...new Set(input.beneficiaryPlayerIds)] : null;
 
-      if (beneficiaryPlayerIds.length === 0) {
+      const participantPlayerIds =
+        input.participantPlayerIds && input.participantPlayerIds.length > 0
+          ? [...input.participantPlayerIds]
+          : legacyBeneficiaryPlayerIds
+            ? [...new Set([...legacyBeneficiaryPlayerIds, advancerPlayerId])]
+            : [];
+
+      if (participantPlayerIds.length === 0) {
         throw badRequest(
-          "MATCH_STAKES_ADVANCE_INVALID",
-          "beneficiaryPlayerIds is required when no other active player exists"
+          "MATCH_STAKES_ADVANCE_PARTICIPANTS_INVALID",
+          "participantPlayerIds is required for MATCH_STAKES_ADVANCE when impactMode is AFFECTS_DEBT"
         );
       }
 
-      if (beneficiaryPlayerIds.includes(advancerPlayerId)) {
-        throw badRequest("MATCH_STAKES_ADVANCE_INVALID", "beneficiaryPlayerIds must not include playerId");
+      if (new Set(participantPlayerIds).size !== participantPlayerIds.length) {
+        throw badRequest("MATCH_STAKES_ADVANCE_PARTICIPANTS_INVALID", "participantPlayerIds must not contain duplicates");
       }
 
-      const beneficiaryPlayers = await txRepositories.players.findActiveByIds(this.groupId, beneficiaryPlayerIds);
-      if (beneficiaryPlayers.length !== beneficiaryPlayerIds.length) {
-        throw unprocessable("MATCH_STAKES_ADVANCE_INVALID", "All beneficiaryPlayerIds must be active group members");
+      if (!participantPlayerIds.includes(advancerPlayerId)) {
+        throw badRequest(
+          "MATCH_STAKES_ADVANCE_ADVANCER_NOT_IN_PARTICIPANTS",
+          "playerId must be included in participantPlayerIds"
+        );
       }
 
-      for (const player of beneficiaryPlayers) {
+      const participantPlayers = await txRepositories.players.findActiveByIds(this.groupId, participantPlayerIds);
+      if (participantPlayers.length !== participantPlayerIds.length) {
+        throw unprocessable(
+          "MATCH_STAKES_ADVANCE_PARTICIPANTS_INVALID",
+          "All participantPlayerIds must be active group members"
+        );
+      }
+
+      for (const player of participantPlayers) {
         playerNameById.set(player.id, player.displayName);
       }
 
@@ -747,9 +774,19 @@ export class MatchStakesService {
       const outstandingByPlayerId = new Map(beforeSummary.players.map((player) => [player.playerId, player.outstandingNetVnd]));
       const impactLines = this.buildAdvanceImpactLines({
         advancerPlayerId,
-        beneficiaryPlayerIds,
+        participantPlayerIds,
         amountVnd
       });
+      const impactLinesForDebt = impactLines.map((line) => ({
+        playerId: line.playerId,
+        netDeltaVnd: line.netDeltaVnd
+      }));
+      const totalNetDeltaVnd = impactLinesForDebt.reduce((sum, line) => sum + line.netDeltaVnd, 0);
+      if (totalNetDeltaVnd !== 0) {
+        throw unprocessable("MATCH_STAKES_ADVANCE_INVALID", "Advance impact lines must net to zero");
+      }
+
+      const advancerNetDeltaVnd = impactLinesForDebt.find((line) => line.playerId === advancerPlayerId)?.netDeltaVnd ?? 0;
 
       const createdEvent = await txRepositories.historyEvents.createEvent({
         groupId: this.groupId,
@@ -768,16 +805,19 @@ export class MatchStakesService {
         balanceBeforeVnd: null,
         balanceAfterVnd: null,
         outstandingBeforeVnd: outstandingByPlayerId.get(advancerPlayerId) ?? 0,
-        outstandingAfterVnd: (outstandingByPlayerId.get(advancerPlayerId) ?? 0) + amountVnd,
+        outstandingAfterVnd: (outstandingByPlayerId.get(advancerPlayerId) ?? 0) + advancerNetDeltaVnd,
         metadataJson: {
           impactMode: "AFFECTS_DEBT",
-          beneficiaryPlayerIds,
+          advancerPlayerId,
+          participantPlayerIds,
+          participantCount: participantPlayerIds.length,
+          legacyBeneficiaryPlayerIds,
           impactLines
         },
         createdByRoleCode: input.createdByRoleCode ?? null
       });
 
-      await txRepositories.historyEvents.insertMatchStakesImpacts(createdEvent.id, this.groupId, period.id, impactLines);
+      await txRepositories.historyEvents.insertMatchStakesImpacts(createdEvent.id, this.groupId, period.id, impactLinesForDebt);
 
       await txRepositories.audits.insert({
         groupId: this.groupId,
@@ -790,6 +830,8 @@ export class MatchStakesService {
           playerId: createdEvent.playerId,
           amountVnd: createdEvent.amountVnd,
           impactMode: "AFFECTS_DEBT",
+          participantPlayerIds,
+          participantCount: participantPlayerIds.length,
           impactLines
         }
       });
@@ -798,6 +840,93 @@ export class MatchStakesService {
       return {
         period: toPeriodDto(period),
         event: this.mapCreatedHistoryEvent(createdEvent, playerNameById),
+        summary: summary.summary,
+        players: summary.players
+      };
+    });
+  }
+
+  public async resetHistoryEvent(
+    eventId: string,
+    input: {
+      reason?: string | null;
+      resetByRoleCode?: string | null;
+    }
+  ) {
+    const normalizedReason = input.reason?.trim() ? input.reason.trim() : null;
+
+    return withTransaction(this.pool, async (tx) => {
+      const txRepositories = createRepositories(tx);
+      const existingEvent = await txRepositories.historyEvents.getEventById(this.groupId, eventId);
+      if (!existingEvent) {
+        throw notFound("MATCH_STAKES_HISTORY_EVENT_NOT_FOUND", "History event not found");
+      }
+
+      if (existingEvent.module !== "MATCH_STAKES") {
+        throw unprocessable("MATCH_STAKES_HISTORY_EVENT_INVALID", "History event is not a match-stakes event");
+      }
+
+      if (existingEvent.eventType !== "MATCH_STAKES_ADVANCE") {
+        throw unprocessable("MATCH_STAKES_HISTORY_EVENT_INVALID", "Only MATCH_STAKES_ADVANCE events can be reset");
+      }
+
+      if (existingEvent.eventStatus === "RESET") {
+        throw conflict("MATCH_STAKES_HISTORY_EVENT_ALREADY_RESET", "History event has already been reset");
+      }
+
+      if (!existingEvent.debtPeriodId) {
+        throw unprocessable("MATCH_STAKES_HISTORY_EVENT_INVALID", "History event is missing debt period");
+      }
+
+      const period = await txRepositories.matchStakesDebt.getPeriodById(this.groupId, existingEvent.debtPeriodId);
+      if (!period) {
+        throw notFound("DEBT_PERIOD_NOT_FOUND", "Debt period not found");
+      }
+
+      const resetEvent = await txRepositories.historyEvents.markEventReset({
+        groupId: this.groupId,
+        eventId: existingEvent.id,
+        resetReason: normalizedReason
+      });
+
+      if (!resetEvent) {
+        throw conflict("MATCH_STAKES_HISTORY_EVENT_ALREADY_RESET", "History event has already been reset");
+      }
+
+      const participantIds = this.extractParticipantPlayerIdsFromMetadata(resetEvent.metadataJson);
+      const playerIdCandidates = new Set<string>([
+        ...(resetEvent.playerId ? [resetEvent.playerId] : []),
+        ...(resetEvent.secondaryPlayerId ? [resetEvent.secondaryPlayerId] : []),
+        ...participantIds
+      ]);
+      const playerIds = [...playerIdCandidates];
+      const relatedPlayers = playerIds.length > 0 ? await txRepositories.players.findActiveByIds(this.groupId, playerIds) : [];
+      const playerNameById = new Map(relatedPlayers.map((player) => [player.id, player.displayName]));
+
+      await txRepositories.audits.insert({
+        groupId: this.groupId,
+        entityType: "MATCH_STAKES_HISTORY_EVENT",
+        entityId: resetEvent.id,
+        actionType: "RESET",
+        before: {
+          eventStatus: existingEvent.eventStatus,
+          resetAt: existingEvent.resetAt,
+          resetReason: existingEvent.resetReason
+        },
+        after: {
+          eventStatus: resetEvent.eventStatus,
+          resetAt: resetEvent.resetAt,
+          resetReason: resetEvent.resetReason
+        },
+        metadata: {
+          resetByRoleCode: input.resetByRoleCode ?? null
+        }
+      });
+
+      const summary = await this.buildDebtPeriodSummary(txRepositories, period.id);
+      return {
+        period: toPeriodDto(period),
+        event: this.mapCreatedHistoryEvent(resetEvent, playerNameById),
         summary: summary.summary,
         players: summary.players
       };
@@ -1136,6 +1265,9 @@ export class MatchStakesService {
     event: {
       id: string;
       eventType: string;
+      eventStatus: "ACTIVE" | "RESET";
+      resetAt: string | null;
+      resetReason: string | null;
       postedAt: string;
       createdAt: string;
       note: string | null;
@@ -1155,6 +1287,9 @@ export class MatchStakesService {
     return toMatchStakesHistoryItem({
       id: event.id,
       itemType: event.eventType === "MATCH_STAKES_ADVANCE" ? "ADVANCE" : "NOTE",
+      eventStatus: event.eventStatus,
+      resetAt: event.resetAt,
+      resetReason: event.resetReason,
       postedAt: event.postedAt,
       createdAt: event.createdAt,
       title:
@@ -1175,62 +1310,66 @@ export class MatchStakesService {
       outstandingBeforeVnd: event.outstandingBeforeVnd,
       outstandingAfterVnd: event.outstandingAfterVnd,
       note: event.note,
-      metadata: event.metadataJson
+      metadata: this.withEventStateMetadata(event.metadataJson, event)
     });
   }
 
-  private async listAllActivePlayers(repositories: RepositoryBundle): Promise<Array<{ id: string; displayName: string }>> {
-    const pageSize = 200;
-    let page = 1;
-    let total = Number.MAX_SAFE_INTEGER;
-    const players: Array<{ id: string; displayName: string }> = [];
-
-    while ((page - 1) * pageSize < total) {
-      const listed = await repositories.players.list({
-        groupId: this.groupId,
-        isActive: true,
-        page,
-        pageSize
-      });
-
-      total = listed.total;
-      for (const item of listed.items) {
-        players.push({
-          id: item.id,
-          displayName: item.displayName
-        });
-      }
-
-      if (listed.items.length < pageSize) {
-        break;
-      }
-
-      page += 1;
+  private withEventStateMetadata(
+    metadata: unknown,
+    event: {
+      eventStatus: "ACTIVE" | "RESET";
+      resetAt: string | null;
+      resetReason: string | null;
+    }
+  ): unknown {
+    if (typeof metadata === "object" && metadata !== null && !Array.isArray(metadata)) {
+      return {
+        ...(metadata as Record<string, unknown>),
+        eventStatus: event.eventStatus,
+        resetAt: event.resetAt,
+        resetReason: event.resetReason
+      };
     }
 
-    return players;
+    return {
+      details: metadata,
+      eventStatus: event.eventStatus,
+      resetAt: event.resetAt,
+      resetReason: event.resetReason
+    };
+  }
+
+  private extractParticipantPlayerIdsFromMetadata(metadata: unknown): string[] {
+    if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) {
+      return [];
+    }
+
+    const candidate = (metadata as { participantPlayerIds?: unknown }).participantPlayerIds;
+    if (!Array.isArray(candidate)) {
+      return [];
+    }
+
+    return candidate.filter((value): value is string => typeof value === "string");
   }
 
   private buildAdvanceImpactLines(input: {
     advancerPlayerId: string;
-    beneficiaryPlayerIds: string[];
+    participantPlayerIds: string[];
     amountVnd: number;
-  }): Array<{ playerId: string; netDeltaVnd: number }> {
-    const beneficiaryIds = [...input.beneficiaryPlayerIds].sort((left, right) => left.localeCompare(right));
-    const baseShare = Math.floor(input.amountVnd / beneficiaryIds.length);
-    const remainder = input.amountVnd % beneficiaryIds.length;
-    const impactByPlayer = new Map<string, number>();
+  }): Array<{ playerId: string; allocatedShareVnd: number; netDeltaVnd: number }> {
+    const participantIds = [...input.participantPlayerIds].sort((left, right) => left.localeCompare(right));
+    const baseShare = Math.floor(input.amountVnd / participantIds.length);
+    const remainder = input.amountVnd % participantIds.length;
 
-    impactByPlayer.set(input.advancerPlayerId, input.amountVnd);
-    beneficiaryIds.forEach((beneficiaryId, index) => {
-      const share = baseShare + (index < remainder ? 1 : 0);
-      impactByPlayer.set(beneficiaryId, (impactByPlayer.get(beneficiaryId) ?? 0) - share);
+    return participantIds.map((playerId, index) => {
+      const allocatedShareVnd = baseShare + (index < remainder ? 1 : 0);
+      const netDeltaVnd = (playerId === input.advancerPlayerId ? input.amountVnd : 0) - allocatedShareVnd;
+      return {
+        playerId,
+        allocatedShareVnd,
+        netDeltaVnd
+      };
     });
-
-    return [...impactByPlayer.entries()].map(([playerId, netDeltaVnd]) => ({
-      playerId,
-      netDeltaVnd
-    }));
   }
 
   private async buildDebtPeriodSummary(

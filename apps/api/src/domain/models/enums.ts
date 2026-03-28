@@ -56,6 +56,8 @@ export type HistoryEventType = (typeof historyEventTypeValues)[number];
 
 export const matchStakesImpactModeValues = ["INFORMATIONAL", "AFFECTS_DEBT"] as const;
 export type MatchStakesImpactMode = (typeof matchStakesImpactModeValues)[number];
+export const moduleHistoryEventStatusValues = ["ACTIVE", "RESET"] as const;
+export type ModuleHistoryEventStatus = (typeof moduleHistoryEventStatusValues)[number];
 
 export const moduleTypeSchema = z.enum(moduleTypeValues);
 export const matchStatusSchema = z.enum(matchStatusValues);
@@ -68,3 +70,4 @@ export const accountTypeSchema = z.enum(accountTypeValues);
 export const debtPeriodStatusSchema = z.enum(debtPeriodStatusValues);
 export const historyEventTypeSchema = z.enum(historyEventTypeValues);
 export const matchStakesImpactModeSchema = z.enum(matchStakesImpactModeValues);
+export const moduleHistoryEventStatusSchema = z.enum(moduleHistoryEventStatusValues);

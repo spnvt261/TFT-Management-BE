@@ -1,4 +1,10 @@
-import type { DebtPeriodStatus, HistoryEventType, MatchStakesImpactMode, ModuleType } from "./enums.js";
+import type {
+  DebtPeriodStatus,
+  HistoryEventType,
+  MatchStakesImpactMode,
+  ModuleHistoryEventStatus,
+  ModuleType
+} from "./enums.js";
 
 export interface GroupRecord {
   id: string;
@@ -131,6 +137,9 @@ export interface ModuleHistoryEventRecord {
   groupId: string;
   module: ModuleType;
   eventType: HistoryEventType;
+  eventStatus: ModuleHistoryEventStatus;
+  resetAt: string | null;
+  resetReason: string | null;
   postedAt: string;
   note: string | null;
   amountVnd: number | null;
