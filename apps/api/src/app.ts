@@ -18,6 +18,7 @@ import { registerJwtPlugin } from "./modules/auth/jwt-plugin.js";
 import { createAuthPreHandler } from "./modules/auth/guard.js";
 import { registerAuthRoutes } from "./modules/auth/routes.js";
 import { AuthService } from "./modules/auth/auth-service.js";
+import { isApiV1Route, normalizePath, requiresAuthentication } from "./modules/auth/policy.js";
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -76,7 +77,6 @@ export async function createApp(services: AppServices) {
           }
         }
       },
-      security: [{ BearerAuth: [] }],
       tags: openApiTags
     }
   });
@@ -95,6 +95,21 @@ export async function createApp(services: AppServices) {
   if (!app.hasRequestDecorator("authUser")) {
     app.decorateRequest("authUser", null);
   }
+
+  app.addHook("onRoute", (routeOptions) => {
+    const methods = Array.isArray(routeOptions.method) ? routeOptions.method : [routeOptions.method];
+    const path = normalizePath(routeOptions.url);
+
+    if (!isApiV1Route(path)) {
+      return;
+    }
+
+    const routeRequiresAuth = methods.some((method) => requiresAuthentication(method, path));
+    const schema = (routeOptions.schema ?? {}) as Record<string, unknown>;
+
+    schema.security = routeRequiresAuth ? [{ BearerAuth: [] }] : [];
+    routeOptions.schema = schema;
+  });
 
   app.addHook("preHandler", createAuthPreHandler(app.jwtAuth));
 

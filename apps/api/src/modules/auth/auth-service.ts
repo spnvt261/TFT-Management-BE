@@ -18,13 +18,24 @@ export class AuthService {
     private readonly jwtService: JwtService
   ) {}
 
-  public async login(accessCode: string): Promise<LoginResult> {
+  public async loginAsUser(): Promise<LoginResult> {
+    return this.issueTokenForRole(USER_ROLE_CODE);
+  }
+
+  public async loginAsAdmin(accessCode: string): Promise<LoginResult> {
     const normalizedCode = accessCode.trim();
     if (normalizedCode.length === 0) {
       throw badRequest("AUTH_LOGIN_INVALID", "accessCode must not be empty");
     }
 
-    const roleCode: RoleCode = normalizedCode === env.auth.adminAccessCode ? ADMIN_ROLE_CODE : USER_ROLE_CODE;
+    if (normalizedCode !== env.auth.adminAccessCode) {
+      throw new AppError(401, "AUTH_ACCESS_CODE_INVALID", "The provided access code is incorrect");
+    }
+
+    return this.issueTokenForRole(ADMIN_ROLE_CODE);
+  }
+
+  private async issueTokenForRole(roleCode: RoleCode): Promise<LoginResult> {
     const role = await this.repositories.roles.findByCode(roleCode);
 
     if (!role) {

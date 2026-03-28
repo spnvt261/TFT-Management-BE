@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { createMockServices } from "./helpers/mock-services.js";
-import { loginAndGetToken } from "./helpers/auth.js";
+import { loginAndGetToken, loginAsUserAndGetToken } from "./helpers/auth.js";
+import { env } from "../src/core/config/env.js";
 
 describe("API - auth and authorization", () => {
   let app: Awaited<ReturnType<typeof createApp>> | null = null;
@@ -13,40 +14,67 @@ describe("API - auth and authorization", () => {
     }
   });
 
-  it("returns ADMIN token for admin123 login", async () => {
+  it("returns USER token for default login", async () => {
     app = await createApp(createMockServices());
 
     const response = await app.inject({
       method: "POST",
-      url: "/api/v1/auth/login",
-      payload: { accessCode: "admin123" }
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.json().success).toBe(true);
-    expect(response.json().data.role).toBe("ADMIN");
-    expect(typeof response.json().data.accessToken).toBe("string");
-    expect(response.json().data.tokenType).toBe("Bearer");
-  });
-
-  it("returns USER token for non-empty non-admin accessCode", async () => {
-    app = await createApp(createMockServices());
-
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: { accessCode: "friends-code" }
+      url: "/api/v1/auth/login"
     });
 
     expect(response.statusCode).toBe(200);
     expect(response.json().success).toBe(true);
     expect(response.json().data.role).toBe("USER");
     expect(typeof response.json().data.accessToken).toBe("string");
+    expect(response.json().data.tokenType).toBe("Bearer");
+  });
+
+  it("returns explicit error for wrong admin access code", async () => {
+    app = await createApp(createMockServices());
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/check-access-code",
+      payload: { accessCode: "wrong-code" }
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json().success).toBe(false);
+    expect(response.json().error.code).toBe("AUTH_ACCESS_CODE_INVALID");
+  });
+
+  it("returns AUTH_LOGIN_INVALID when admin access code is empty", async () => {
+    app = await createApp(createMockServices());
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/check-access-code",
+      payload: { accessCode: "   " }
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().success).toBe(false);
+    expect(response.json().error.code).toBe("AUTH_LOGIN_INVALID");
+  });
+
+  it("returns ADMIN token for correct access code", async () => {
+    app = await createApp(createMockServices());
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/check-access-code",
+      payload: { accessCode: env.auth.adminAccessCode }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().success).toBe(true);
+    expect(response.json().data.role).toBe("ADMIN");
+    expect(typeof response.json().data.accessToken).toBe("string");
   });
 
   it("allows USER on GET and blocks USER on write endpoints", async () => {
     app = await createApp(createMockServices());
-    const userToken = await loginAndGetToken(app, "friends-code");
+    const userToken = await loginAsUserAndGetToken(app);
 
     const getResponse = await app.inject({
       method: "GET",
@@ -78,7 +106,7 @@ describe("API - auth and authorization", () => {
 
   it("allows ADMIN on write endpoints", async () => {
     app = await createApp(createMockServices());
-    const adminToken = await loginAndGetToken(app, "admin123");
+    const adminToken = await loginAndGetToken(app);
 
     const response = await app.inject({
       method: "POST",
@@ -98,7 +126,7 @@ describe("API - auth and authorization", () => {
     expect(response.json().data.displayName).toBe("Admin Writer");
   });
 
-  it("returns 401 when protected endpoint is called without token", async () => {
+  it("allows GET endpoints without token", async () => {
     app = await createApp(createMockServices());
 
     const response = await app.inject({
@@ -106,8 +134,72 @@ describe("API - auth and authorization", () => {
       url: "/api/v1/players?page=1&pageSize=10"
     });
 
+    expect(response.statusCode).toBe(200);
+    expect(response.json().success).toBe(true);
+  });
+
+  it("returns 401 when write endpoint is called without token", async () => {
+    app = await createApp(createMockServices());
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/players",
+      payload: {
+        displayName: "No Token",
+        slug: "no-token",
+        isActive: true
+      }
+    });
+
     expect(response.statusCode).toBe(401);
     expect(response.json().success).toBe(false);
     expect(response.json().error.code).toBe("AUTH_UNAUTHORIZED");
+  });
+
+  it("returns 401 when write endpoint is called with invalid token", async () => {
+    app = await createApp(createMockServices());
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/players",
+      headers: {
+        authorization: "Bearer invalid-token"
+      },
+      payload: {
+        displayName: "Invalid Token",
+        slug: "invalid-token",
+        isActive: true
+      }
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json().success).toBe(false);
+    expect(response.json().error.code).toBe("AUTH_UNAUTHORIZED");
+  });
+
+  it("documents GET routes as public and write routes as bearer-protected", async () => {
+    app = await createApp(createMockServices());
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/docs/json"
+    });
+
+    expect(response.statusCode).toBe(200);
+
+    const openApi = response.json() as {
+      paths?: Record<
+        string,
+        {
+          get?: { security?: unknown };
+          post?: { security?: unknown };
+        }
+      >;
+    };
+
+    expect(openApi.paths?.["/api/v1/players"]?.get?.security).toEqual([]);
+    expect(openApi.paths?.["/api/v1/players"]?.post?.security).toEqual([{ BearerAuth: [] }]);
+    expect(openApi.paths?.["/api/v1/auth/login"]?.post?.security).toEqual([]);
+    expect(openApi.paths?.["/api/v1/auth/check-access-code"]?.post?.security).toEqual([]);
   });
 });

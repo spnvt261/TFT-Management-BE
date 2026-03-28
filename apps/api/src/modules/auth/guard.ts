@@ -2,33 +2,7 @@ import type { FastifyRequest } from "fastify";
 import { AppError } from "../../core/errors/app-error.js";
 import type { AuthenticatedUser } from "./auth.types.js";
 import type { JwtService } from "./jwt.service.js";
-
-const PUBLIC_API_ROUTE_KEYS = new Set<string>(["GET /api/v1/health", "POST /api/v1/auth/login"]);
-
-function normalizePath(path: string): string {
-  if (path === "/") {
-    return path;
-  }
-
-  return path.endsWith("/") ? path.slice(0, -1) : path;
-}
-
-function parseRequestPath(url: string): string {
-  const [pathOnly] = url.split("?", 1);
-  return normalizePath(pathOnly ?? "/");
-}
-
-function isProtectedRoute(method: string, path: string): boolean {
-  if (method === "OPTIONS") {
-    return false;
-  }
-
-  if (!path.startsWith("/api/v1")) {
-    return false;
-  }
-
-  return !PUBLIC_API_ROUTE_KEYS.has(`${method} ${path}`);
-}
+import { parseRequestPath, requiresAdminRole, requiresAuthentication } from "./policy.js";
 
 function getHeaderValue(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) {
@@ -75,13 +49,8 @@ export function authenticateRequest(
   }
 }
 
-export function authorizeRequest(user: AuthenticatedUser, method: string): void {
-  const normalizedMethod = method.toUpperCase();
-  if (normalizedMethod === "GET" || normalizedMethod === "HEAD") {
-    return;
-  }
-
-  if (user.roleCode !== "ADMIN") {
+export function authorizeRequest(user: AuthenticatedUser, method: string, path: string): void {
+  if (requiresAdminRole(method, path) && user.roleCode !== "ADMIN") {
     throw new AppError(403, "AUTH_FORBIDDEN", "Insufficient permission for this operation");
   }
 }
@@ -91,12 +60,12 @@ export function createAuthPreHandler(jwtService: JwtService) {
     const method = request.method.toUpperCase();
     const path = parseRequestPath(request.url);
 
-    if (!isProtectedRoute(method, path)) {
+    if (!requiresAuthentication(method, path)) {
       return;
     }
 
     const authenticatedUser = authenticateRequest(request.headers.authorization, jwtService);
-    authorizeRequest(authenticatedUser, method);
+    authorizeRequest(authenticatedUser, method, path);
     request.authUser = authenticatedUser;
   };
 }

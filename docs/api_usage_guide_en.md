@@ -26,14 +26,17 @@ For detailed auth sequence examples, see `docs/auth_flow_en.md`.
 - Public routes:
   - `GET /`
   - `GET /api/v1/health`
+  - All `GET` / `HEAD` routes under `/api/v1/**`
   - `POST /api/v1/auth/login`
-- All other `/api/v1/**` routes require `Authorization: Bearer <accessToken>`.
+  - `POST /api/v1/auth/check-access-code`
+- Protected routes:
+  - `POST` / `PUT` / `PATCH` / `DELETE` under `/api/v1/**` (except the two auth routes above)
 - Roles:
-  - `USER`: read-only (`GET`/`HEAD`).
+  - `USER`: read access token (write is forbidden).
   - `ADMIN`: full access (`GET/POST/PUT/PATCH/DELETE`).
-- Login is intentionally internal/simple:
-  - `accessCode === "admin123"` => `ADMIN` token.
-  - Any other non-empty `accessCode` => `USER` token.
+- Login behavior:
+  - `POST /api/v1/auth/login` => default `USER` token.
+  - `POST /api/v1/auth/check-access-code` => `ADMIN` token only when access code is correct.
 
 ### Startup lifecycle
 
@@ -133,26 +136,40 @@ type RoleCode = "ADMIN" | "USER";
 
 ### 2.6 Authentication conventions
 
-Login endpoint:
+Login endpoints:
 
 - `POST /api/v1/auth/login`
+- `POST /api/v1/auth/check-access-code`
 
-Request DTO:
+User login request DTO:
 
 ```ts
-interface LoginRequest {
+interface LoginRequest {}
+```
+
+Admin access-code request DTO:
+
+```ts
+interface CheckAccessCodeRequest {
   accessCode: string;
 }
 ```
 
-Response DTO:
+Responses DTO:
 
 ```ts
 ApiSuccessResponse<{
   accessToken: string;
   tokenType: "Bearer";
   expiresIn: number; // seconds
-  role: "ADMIN" | "USER";
+  role: "USER"; // /auth/login
+}>;
+
+ApiSuccessResponse<{
+  accessToken: string;
+  tokenType: "Bearer";
+  expiresIn: number; // seconds
+  role: "ADMIN"; // /auth/check-access-code
 }>;
 ```
 
@@ -164,8 +181,10 @@ Authorization: Bearer <accessToken>
 
 Authorization rules by HTTP method:
 
-- `GET`/`HEAD`: `USER` or `ADMIN`.
+- `GET`/`HEAD`: public, no token required.
 - `POST`/`PUT`/`PATCH`/`DELETE`: `ADMIN` only.
+- `USER` token on write: `403 AUTH_FORBIDDEN`.
+- Missing/invalid/expired token on write: `401 AUTH_UNAUTHORIZED`.
 
 ## 3. Endpoint Catalog
 
@@ -173,7 +192,8 @@ Authorization rules by HTTP method:
 | --- | --- | --- |
 | GET | `/` | Service ready check |
 | GET | `/api/v1/health` | Health status |
-| POST | `/api/v1/auth/login` | Login and issue JWT |
+| POST | `/api/v1/auth/login` | Login as USER and issue JWT |
+| POST | `/api/v1/auth/check-access-code` | Validate admin access code and issue ADMIN JWT |
 | GET | `/api/v1/players` | List players |
 | POST | `/api/v1/players` | Create player |
 | GET | `/api/v1/players/:playerId` | Player detail |
@@ -315,12 +335,43 @@ Processing flow:
 
 ### POST `/api/v1/auth/login`
 
-Business purpose: issue access token for internal use.
+Business purpose: issue default `USER` access token.
 
 Request DTO:
 
 ```ts
-interface LoginRequest {
+interface LoginRequest {}
+```
+
+Response DTO:
+
+```ts
+ApiSuccessResponse<{
+  accessToken: string;
+  tokenType: "Bearer";
+  expiresIn: number;
+  role: "USER";
+}>;
+```
+
+Processing flow:
+
+1. Resolve `USER` role from `roles` table.
+2. Issue signed JWT containing `roleId`, `roleCode`, `iat`, `exp`.
+3. Return token payload.
+
+Main errors:
+
+- `500 AUTH_ROLE_NOT_CONFIGURED` when role rows are missing in DB.
+
+### POST `/api/v1/auth/check-access-code`
+
+Business purpose: explicit `ADMIN` authentication by access code.
+
+Request DTO:
+
+```ts
+interface CheckAccessCodeRequest {
   accessCode: string;
 }
 ```
@@ -332,23 +383,23 @@ ApiSuccessResponse<{
   accessToken: string;
   tokenType: "Bearer";
   expiresIn: number;
-  role: "ADMIN" | "USER";
+  role: "ADMIN";
 }>;
 ```
 
 Processing flow:
 
 1. Validate `accessCode` non-empty.
-2. Resolve role code:
-   - `admin123` => `ADMIN`
-   - otherwise => `USER`
-3. Load role metadata from `roles` table.
-4. Issue signed JWT containing `roleId`, `roleCode`, `iat`, `exp`.
-5. Return token payload.
+2. Compare with configured `ADMIN_ACCESS_CODE`.
+3. If code is wrong, return explicit auth error (no fallback to USER).
+4. If code is correct, load `ADMIN` role metadata.
+5. Issue signed JWT containing `roleId`, `roleCode`, `iat`, `exp`.
+6. Return token payload.
 
 Main errors:
 
 - `400 AUTH_LOGIN_INVALID` when `accessCode` is empty.
+- `401 AUTH_ACCESS_CODE_INVALID` when `accessCode` is incorrect.
 - `500 AUTH_ROLE_NOT_CONFIGURED` when role rows are missing in DB.
 
 ## 5.2 Player APIs
@@ -1938,7 +1989,8 @@ Processing flow:
 | --- | --- |
 | `VALIDATION_ERROR` | Zod validation failed |
 | `INTERNAL_ERROR` | Unhandled server error |
-| `AUTH_LOGIN_INVALID` | Login payload invalid (`accessCode` empty) |
+| `AUTH_LOGIN_INVALID` | Admin access-code payload invalid (`accessCode` empty) |
+| `AUTH_ACCESS_CODE_INVALID` | Admin access code is incorrect |
 | `AUTH_UNAUTHORIZED` | Missing/invalid/expired bearer token |
 | `AUTH_FORBIDDEN` | Authenticated but role does not allow the HTTP method |
 | `AUTH_ROLE_NOT_CONFIGURED` | Role metadata not found in `roles` table |
