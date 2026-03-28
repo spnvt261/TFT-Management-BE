@@ -43,6 +43,8 @@ export interface DebtPeriodPlayerAggregateRow {
   playerName: string;
   totalMatches: number;
   initNetVnd: number;
+  accruedMatchNetVnd: number;
+  accruedAdvanceNetVnd: number;
   accruedNetVnd: number;
   settledPaidVnd: number;
   settledReceivedVnd: number;
@@ -266,6 +268,8 @@ export class MatchStakesDebtRepository {
       player_name: string;
       total_matches: number;
       init_net_vnd: number;
+      accrued_match_net_vnd: number;
+      accrued_advance_net_vnd: number;
       accrued_net_vnd: number;
       settled_paid_vnd: number;
       settled_received_vnd: number;
@@ -293,7 +297,7 @@ export class MatchStakesDebtRepository {
         SELECT
           mp.player_id,
           COUNT(*)::int AS total_matches,
-          COALESCE(SUM(mp.settlement_net_vnd), 0)::bigint AS accrued_net_vnd
+          COALESCE(SUM(mp.settlement_net_vnd), 0)::bigint AS accrued_match_net_vnd
         FROM match_participants mp
         INNER JOIN matches m ON m.id = mp.match_id
         WHERE m.group_id = $1
@@ -322,14 +326,18 @@ export class MatchStakesDebtRepository {
           AND s.debt_period_id = $2
         GROUP BY l.receiver_player_id
       ),
-      event_agg AS (
+      advance_agg AS (
         SELECT
           i.player_id,
-          COALESCE(SUM(i.net_delta_vnd), 0)::bigint AS event_net_vnd
+          COALESCE(SUM(i.net_delta_vnd), 0)::bigint AS accrued_advance_net_vnd
         FROM match_stakes_history_event_player_impacts i
         INNER JOIN module_history_events e ON e.id = i.history_event_id
         WHERE i.group_id = $1
           AND i.debt_period_id = $2
+          AND e.module = 'MATCH_STAKES'
+          AND e.event_type = 'MATCH_STAKES_ADVANCE'
+          AND e.match_stakes_impact_mode = 'AFFECTS_DEBT'
+          AND e.affects_debt = TRUE
           AND e.event_status = 'ACTIVE'
         GROUP BY i.player_id
       ),
@@ -342,7 +350,7 @@ export class MatchStakesDebtRepository {
         UNION
         SELECT player_id FROM received_agg
         UNION
-        SELECT player_id FROM event_agg
+        SELECT player_id FROM advance_agg
       ),
       player_scope AS (
         SELECT ap.player_id, ap.player_name
@@ -357,7 +365,9 @@ export class MatchStakesDebtRepository {
         ps.player_name,
         COALESCE(ma.total_matches, 0) AS total_matches,
         COALESCE(ia.init_net_vnd, 0) AS init_net_vnd,
-        (COALESCE(ma.accrued_net_vnd, 0) + COALESCE(ea.event_net_vnd, 0))::bigint AS accrued_net_vnd,
+        COALESCE(ma.accrued_match_net_vnd, 0) AS accrued_match_net_vnd,
+        COALESCE(aa.accrued_advance_net_vnd, 0) AS accrued_advance_net_vnd,
+        (COALESCE(ma.accrued_match_net_vnd, 0) + COALESCE(aa.accrued_advance_net_vnd, 0))::bigint AS accrued_net_vnd,
         COALESCE(pa.settled_paid_vnd, 0) AS settled_paid_vnd,
         COALESCE(ra.settled_received_vnd, 0) AS settled_received_vnd
       FROM player_scope ps
@@ -365,7 +375,7 @@ export class MatchStakesDebtRepository {
       LEFT JOIN match_agg ma ON ma.player_id = ps.player_id
       LEFT JOIN paid_agg pa ON pa.player_id = ps.player_id
       LEFT JOIN received_agg ra ON ra.player_id = ps.player_id
-      LEFT JOIN event_agg ea ON ea.player_id = ps.player_id
+      LEFT JOIN advance_agg aa ON aa.player_id = ps.player_id
       `,
       [groupId, periodId]
     );
@@ -375,6 +385,8 @@ export class MatchStakesDebtRepository {
       playerName: row.player_name,
       totalMatches: row.total_matches,
       initNetVnd: row.init_net_vnd,
+      accruedMatchNetVnd: row.accrued_match_net_vnd,
+      accruedAdvanceNetVnd: row.accrued_advance_net_vnd,
       accruedNetVnd: row.accrued_net_vnd,
       settledPaidVnd: row.settled_paid_vnd,
       settledReceivedVnd: row.settled_received_vnd

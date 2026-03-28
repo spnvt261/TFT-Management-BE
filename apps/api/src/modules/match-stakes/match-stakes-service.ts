@@ -10,17 +10,33 @@ interface DebtPeriodPlayerSummaryItem {
   playerName: string;
   totalMatches: number;
   initNetVnd: number;
+  accruedMatchNetVnd: number;
+  accruedAdvanceNetVnd: number;
+  accruedCombinedNetVnd: number;
+  matchNetVnd: number;
+  advanceNetVnd: number;
+  combinedNetVnd: number;
   accruedNetVnd: number;
   settledPaidVnd: number;
   settledReceivedVnd: number;
+  outstandingCombinedNetVnd: number;
   outstandingNetVnd: number;
 }
 
 interface DebtPeriodSummarySnapshot {
   totalMatches: number;
   totalPlayers: number;
+  totalMatchNetReceiveVnd: number;
+  totalMatchNetPayVnd: number;
+  totalAdvanceNetReceiveVnd: number;
+  totalAdvanceNetPayVnd: number;
+  totalCombinedNetReceiveVnd: number;
+  totalCombinedNetPayVnd: number;
+  totalOutstandingCombinedReceiveVnd: number;
+  totalOutstandingCombinedPayVnd: number;
   totalOutstandingReceiveVnd: number;
   totalOutstandingPayVnd: number;
+  initialBalanceDecomposition: "COMBINED_ONLY";
 }
 
 interface DebtPeriodTimelinePlayerScopeItem {
@@ -33,6 +49,12 @@ interface DebtPeriodTimelinePlayerRowItem {
   playerName: string;
   tftPlacement: number | null;
   relativeRank: number | null;
+  matchDeltaVnd: number;
+  advanceDeltaVnd: number;
+  combinedDeltaVnd: number;
+  cumulativeMatchNetVnd: number;
+  cumulativeAdvanceNetVnd: number;
+  cumulativeCombinedNetVnd: number;
   matchNetVnd: number;
   cumulativeNetVnd: number;
 }
@@ -48,16 +70,34 @@ interface DebtPeriodTimelineItem {
   status: string | null;
   amountVnd: number | null;
   note: string | null;
+  eventStatus: "ACTIVE" | "RESET" | null;
   affectsDebt: boolean | null;
   impactMode: MatchStakesImpactMode | null;
+  debtImpactBucket: "MATCH" | "ADVANCE" | null;
+  debtImpactActive: boolean | null;
+  initialBalanceDecomposition: "COMBINED_ONLY" | null;
   metadata: unknown | null;
   rows: DebtPeriodTimelinePlayerRowItem[];
+}
+
+interface MatchStakesAdvanceImpactLineItem {
+  playerId: string;
+  allocatedShareVnd: number | null;
+  netDeltaVnd: number;
 }
 
 interface MatchStakesHistoryItem {
   id: string;
   module: "MATCH_STAKES";
   itemType: string;
+  eventType: string | null;
+  impactMode: MatchStakesImpactMode | null;
+  affectsDebt: boolean | null;
+  advancerPlayerId: string | null;
+  participantPlayerIds: string[] | null;
+  impactLines: MatchStakesAdvanceImpactLineItem[] | null;
+  debtImpactBucket: "MATCH" | "ADVANCE" | null;
+  debtImpactActive: boolean | null;
   eventStatus: "ACTIVE" | "RESET" | null;
   resetAt: string | null;
   resetReason: string | null;
@@ -101,19 +141,19 @@ function toPeriodDto(period: MatchStakesDebtPeriodRecord) {
 
 function sortPlayers(items: DebtPeriodPlayerSummaryItem[]): DebtPeriodPlayerSummaryItem[] {
   return [...items].sort((left, right) => {
-    const leftBucket = left.outstandingNetVnd > 0 ? 0 : left.outstandingNetVnd === 0 ? 1 : 2;
-    const rightBucket = right.outstandingNetVnd > 0 ? 0 : right.outstandingNetVnd === 0 ? 1 : 2;
+    const leftBucket = left.outstandingCombinedNetVnd > 0 ? 0 : left.outstandingCombinedNetVnd === 0 ? 1 : 2;
+    const rightBucket = right.outstandingCombinedNetVnd > 0 ? 0 : right.outstandingCombinedNetVnd === 0 ? 1 : 2;
 
     if (leftBucket !== rightBucket) {
       return leftBucket - rightBucket;
     }
 
-    if (leftBucket === 0 && left.outstandingNetVnd !== right.outstandingNetVnd) {
-      return right.outstandingNetVnd - left.outstandingNetVnd;
+    if (leftBucket === 0 && left.outstandingCombinedNetVnd !== right.outstandingCombinedNetVnd) {
+      return right.outstandingCombinedNetVnd - left.outstandingCombinedNetVnd;
     }
 
-    if (leftBucket === 2 && left.outstandingNetVnd !== right.outstandingNetVnd) {
-      return left.outstandingNetVnd - right.outstandingNetVnd;
+    if (leftBucket === 2 && left.outstandingCombinedNetVnd !== right.outstandingCombinedNetVnd) {
+      return left.outstandingCombinedNetVnd - right.outstandingCombinedNetVnd;
     }
 
     const byName = left.playerName.localeCompare(right.playerName);
@@ -123,6 +163,56 @@ function sortPlayers(items: DebtPeriodPlayerSummaryItem[]): DebtPeriodPlayerSumm
 
     return left.playerId.localeCompare(right.playerId);
   });
+}
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function parseStringArray(value: unknown): string[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const parsed = value.filter((item): item is string => typeof item === "string");
+  return parsed.length > 0 ? parsed : [];
+}
+
+function parseAdvanceImpactLines(value: unknown): MatchStakesAdvanceImpactLineItem[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const parsed = value
+    .map((item) => asObject(item))
+    .filter((item): item is Record<string, unknown> => item !== null)
+    .map((item) => {
+      const playerId = typeof item.playerId === "string" ? item.playerId : null;
+      const netDeltaVnd = typeof item.netDeltaVnd === "number" ? item.netDeltaVnd : null;
+      const allocatedShareVnd = typeof item.allocatedShareVnd === "number" ? item.allocatedShareVnd : null;
+      if (!playerId || netDeltaVnd === null) {
+        return null;
+      }
+
+      return {
+        playerId,
+        allocatedShareVnd,
+        netDeltaVnd
+      };
+    })
+    .filter((item): item is MatchStakesAdvanceImpactLineItem => item !== null);
+
+  return parsed.length > 0 ? parsed : [];
+}
+
+function resolveAdvanceDetails(metadata: unknown): Record<string, unknown> | null {
+  const root = asObject(metadata);
+  if (!root) {
+    return null;
+  }
+
+  const details = asObject(root.details);
+  return details ?? root;
 }
 
 function sortTimelineRows(rows: DebtPeriodTimelinePlayerRowItem[]): DebtPeriodTimelinePlayerRowItem[] {
@@ -145,6 +235,9 @@ function sortTimelineRows(rows: DebtPeriodTimelinePlayerRowItem[]): DebtPeriodTi
 function toMatchStakesHistoryItem(input: {
   id: string;
   itemType: string;
+  eventType: string | null;
+  impactMode: MatchStakesImpactMode | null;
+  affectsDebt: boolean | null;
   eventStatus: "ACTIVE" | "RESET" | null;
   resetAt: string | null;
   resetReason: string | null;
@@ -167,10 +260,29 @@ function toMatchStakesHistoryItem(input: {
   note: string | null;
   metadata: unknown;
 }): MatchStakesHistoryItem {
+  const isAdvanceEvent = input.eventType === "MATCH_STAKES_ADVANCE";
+  const advanceDetails = isAdvanceEvent ? resolveAdvanceDetails(input.metadata) : null;
+  const participantPlayerIds = isAdvanceEvent ? parseStringArray(advanceDetails?.participantPlayerIds) : null;
+  const impactLines = isAdvanceEvent ? parseAdvanceImpactLines(advanceDetails?.impactLines) : null;
+  const metadataAdvancerPlayerId =
+    advanceDetails && typeof advanceDetails.advancerPlayerId === "string" ? advanceDetails.advancerPlayerId : null;
+  const advancerPlayerId = isAdvanceEvent ? input.playerId ?? metadataAdvancerPlayerId : null;
+  const isAdvanceDebtImpact = isAdvanceEvent && input.affectsDebt === true && input.impactMode === "AFFECTS_DEBT";
+  const debtImpactBucket: "MATCH" | "ADVANCE" | null = input.itemType === "MATCH" ? "MATCH" : isAdvanceDebtImpact ? "ADVANCE" : null;
+  const debtImpactActive = debtImpactBucket === "ADVANCE" ? input.eventStatus === "ACTIVE" : debtImpactBucket === "MATCH" ? true : null;
+
   return {
     id: input.id,
     module: "MATCH_STAKES",
     itemType: input.itemType,
+    eventType: input.eventType,
+    impactMode: input.impactMode,
+    affectsDebt: input.affectsDebt,
+    advancerPlayerId,
+    participantPlayerIds,
+    impactLines,
+    debtImpactBucket,
+    debtImpactActive,
     eventStatus: input.eventStatus,
     resetAt: input.resetAt,
     resetReason: input.resetReason,
@@ -334,6 +446,9 @@ export class MatchStakesService {
         toMatchStakesHistoryItem({
           id: item.id,
           itemType: item.itemType,
+          eventType: item.eventType,
+          impactMode: item.impactMode,
+          affectsDebt: item.affectsDebt,
           eventStatus: item.eventStatus,
           resetAt: item.resetAt,
           resetReason: item.resetReason,
@@ -406,7 +521,9 @@ export class MatchStakesService {
     }));
 
     const initByPlayer = new Map(summary.players.map((item) => [item.playerId, item.initNetVnd]));
-    const cumulativeByPlayer = new Map(playerScope.map((item) => [item.playerId, initByPlayer.get(item.playerId) ?? 0]));
+    const cumulativeMatchByPlayer = new Map(playerScope.map((item) => [item.playerId, 0]));
+    const cumulativeAdvanceByPlayer = new Map(playerScope.map((item) => [item.playerId, 0]));
+    const cumulativeCombinedByPlayer = new Map(playerScope.map((item) => [item.playerId, initByPlayer.get(item.playerId) ?? 0]));
     const matchById = new Map(periodMatches.map((match) => [match.id, match]));
     const eventById = new Map(periodEvents.map((event) => [event.id, event]));
     const fallbackMatchNoById = new Map(periodMatches.map((match, index) => [match.id, match.periodMatchNo ?? index + 1]));
@@ -452,8 +569,12 @@ export class MatchStakesService {
             status: null,
             amountVnd: null,
             note: null,
+            eventStatus: null,
             affectsDebt: null,
             impactMode: null,
+            debtImpactBucket: "MATCH" as const,
+            debtImpactActive: true,
+            initialBalanceDecomposition: null,
             metadata: null,
             rows: sortTimelineRows(
               playerScope.map((player) => ({
@@ -461,8 +582,14 @@ export class MatchStakesService {
                 playerName: player.playerName,
                 tftPlacement: null,
                 relativeRank: null,
+                matchDeltaVnd: 0,
+                advanceDeltaVnd: 0,
+                combinedDeltaVnd: 0,
+                cumulativeMatchNetVnd: cumulativeMatchByPlayer.get(player.playerId) ?? 0,
+                cumulativeAdvanceNetVnd: cumulativeAdvanceByPlayer.get(player.playerId) ?? 0,
+                cumulativeCombinedNetVnd: cumulativeCombinedByPlayer.get(player.playerId) ?? 0,
                 matchNetVnd: 0,
-                cumulativeNetVnd: cumulativeByPlayer.get(player.playerId) ?? 0
+                cumulativeNetVnd: cumulativeCombinedByPlayer.get(player.playerId) ?? 0
               }))
             )
           };
@@ -473,17 +600,28 @@ export class MatchStakesService {
 
         const rows = playerScope.map((player) => {
           const participant = participantByPlayerId.get(player.playerId);
-          const matchNetVnd = participant?.settlementNetVnd ?? 0;
-          const cumulativeNetVnd = (cumulativeByPlayer.get(player.playerId) ?? 0) + matchNetVnd;
-          cumulativeByPlayer.set(player.playerId, cumulativeNetVnd);
+          const matchDeltaVnd = participant?.settlementNetVnd ?? 0;
+          const advanceDeltaVnd = 0;
+          const combinedDeltaVnd = matchDeltaVnd;
+          const cumulativeMatchNetVnd = (cumulativeMatchByPlayer.get(player.playerId) ?? 0) + matchDeltaVnd;
+          const cumulativeAdvanceNetVnd = cumulativeAdvanceByPlayer.get(player.playerId) ?? 0;
+          const cumulativeCombinedNetVnd = (cumulativeCombinedByPlayer.get(player.playerId) ?? 0) + combinedDeltaVnd;
+          cumulativeMatchByPlayer.set(player.playerId, cumulativeMatchNetVnd);
+          cumulativeCombinedByPlayer.set(player.playerId, cumulativeCombinedNetVnd);
 
           return {
             playerId: player.playerId,
             playerName: player.playerName,
             tftPlacement: participant?.tftPlacement ?? null,
             relativeRank: participant?.relativeRank ?? null,
-            matchNetVnd,
-            cumulativeNetVnd
+            matchDeltaVnd,
+            advanceDeltaVnd,
+            combinedDeltaVnd,
+            cumulativeMatchNetVnd,
+            cumulativeAdvanceNetVnd,
+            cumulativeCombinedNetVnd,
+            matchNetVnd: combinedDeltaVnd,
+            cumulativeNetVnd: cumulativeCombinedNetVnd
           };
         });
 
@@ -498,8 +636,12 @@ export class MatchStakesService {
           status: match.status,
           amountVnd: null,
           note: null,
+          eventStatus: null,
           affectsDebt: null,
           impactMode: null,
+          debtImpactBucket: "MATCH" as const,
+          debtImpactActive: true,
+          initialBalanceDecomposition: null,
           metadata: null,
           rows: sortTimelineRows(rows)
         };
@@ -508,19 +650,33 @@ export class MatchStakesService {
       const event = eventById.get(entry.id);
       const impactRows = event ? impactsByEventId.get(event.id) ?? [] : [];
       const impactByPlayerId = new Map(impactRows.map((impact) => [impact.playerId, impact.netDeltaVnd]));
+      const isAdvanceDebtEvent =
+        event?.eventType === "MATCH_STAKES_ADVANCE" && event.affectsDebt === true && event.impactMode === "AFFECTS_DEBT";
 
       const rows = playerScope.map((player) => {
         const eventNetVnd = impactByPlayerId.get(player.playerId) ?? 0;
-        const cumulativeNetVnd = (cumulativeByPlayer.get(player.playerId) ?? 0) + eventNetVnd;
-        cumulativeByPlayer.set(player.playerId, cumulativeNetVnd);
+        const matchDeltaVnd = 0;
+        const advanceDeltaVnd = isAdvanceDebtEvent ? eventNetVnd : 0;
+        const combinedDeltaVnd = matchDeltaVnd + advanceDeltaVnd;
+        const cumulativeMatchNetVnd = cumulativeMatchByPlayer.get(player.playerId) ?? 0;
+        const cumulativeAdvanceNetVnd = (cumulativeAdvanceByPlayer.get(player.playerId) ?? 0) + advanceDeltaVnd;
+        const cumulativeCombinedNetVnd = (cumulativeCombinedByPlayer.get(player.playerId) ?? 0) + combinedDeltaVnd;
+        cumulativeAdvanceByPlayer.set(player.playerId, cumulativeAdvanceNetVnd);
+        cumulativeCombinedByPlayer.set(player.playerId, cumulativeCombinedNetVnd);
 
         return {
           playerId: player.playerId,
           playerName: player.playerName,
           tftPlacement: null,
           relativeRank: null,
-          matchNetVnd: eventNetVnd,
-          cumulativeNetVnd
+          matchDeltaVnd,
+          advanceDeltaVnd,
+          combinedDeltaVnd,
+          cumulativeMatchNetVnd,
+          cumulativeAdvanceNetVnd,
+          cumulativeCombinedNetVnd,
+          matchNetVnd: combinedDeltaVnd,
+          cumulativeNetVnd: cumulativeCombinedNetVnd
         };
       });
 
@@ -535,8 +691,12 @@ export class MatchStakesService {
         status: event?.eventStatus ?? null,
         amountVnd: event?.amountVnd ?? null,
         note: event?.note ?? null,
+        eventStatus: event?.eventStatus ?? null,
         affectsDebt: event?.affectsDebt ?? null,
         impactMode: event?.impactMode ?? null,
+        debtImpactBucket: isAdvanceDebtEvent ? ("ADVANCE" as const) : null,
+        debtImpactActive: isAdvanceDebtEvent ? event?.eventStatus === "ACTIVE" : null,
+        initialBalanceDecomposition: null,
         metadata: event?.metadata ?? null,
         rows: sortTimelineRows(rows)
       };
@@ -555,8 +715,12 @@ export class MatchStakesService {
         status: null,
         amountVnd: null,
         note: null,
+        eventStatus: null,
         affectsDebt: null,
         impactMode: null,
+        debtImpactBucket: null,
+        debtImpactActive: null,
+        initialBalanceDecomposition: "COMBINED_ONLY",
         metadata: null,
         rows: sortTimelineRows(
           playerScope.map((player) => ({
@@ -564,6 +728,12 @@ export class MatchStakesService {
             playerName: player.playerName,
             tftPlacement: null,
             relativeRank: null,
+            matchDeltaVnd: 0,
+            advanceDeltaVnd: 0,
+            combinedDeltaVnd: initByPlayer.get(player.playerId) ?? 0,
+            cumulativeMatchNetVnd: 0,
+            cumulativeAdvanceNetVnd: 0,
+            cumulativeCombinedNetVnd: initByPlayer.get(player.playerId) ?? 0,
             matchNetVnd: initByPlayer.get(player.playerId) ?? 0,
             cumulativeNetVnd: initByPlayer.get(player.playerId) ?? 0
           }))
@@ -702,7 +872,9 @@ export class MatchStakesService {
           outstandingBeforeVnd: null,
           outstandingAfterVnd: null,
           metadataJson: {
-            impactMode: "INFORMATIONAL"
+            impactMode: "INFORMATIONAL",
+            debtImpactBucket: "ADVANCE",
+            affectsDebt: false
           },
           createdByRoleCode: input.createdByRoleCode ?? null
         });
@@ -771,7 +943,9 @@ export class MatchStakesService {
       }
 
       const beforeSummary = await this.buildDebtPeriodSummary(txRepositories, period.id);
-      const outstandingByPlayerId = new Map(beforeSummary.players.map((player) => [player.playerId, player.outstandingNetVnd]));
+      const outstandingByPlayerId = new Map(
+        beforeSummary.players.map((player) => [player.playerId, player.outstandingCombinedNetVnd])
+      );
       const impactLines = this.buildAdvanceImpactLines({
         advancerPlayerId,
         participantPlayerIds,
@@ -808,6 +982,8 @@ export class MatchStakesService {
         outstandingAfterVnd: (outstandingByPlayerId.get(advancerPlayerId) ?? 0) + advancerNetDeltaVnd,
         metadataJson: {
           impactMode: "AFFECTS_DEBT",
+          debtImpactBucket: "ADVANCE",
+          affectsDebt: true,
           advancerPlayerId,
           participantPlayerIds,
           participantCount: participantPlayerIds.length,
@@ -996,7 +1172,7 @@ export class MatchStakesService {
       }
 
       const beforeSummary = await this.buildDebtPeriodSummary(txRepositories, period.id);
-      const outstandingByPlayer = new Map(beforeSummary.players.map((item) => [item.playerId, item.outstandingNetVnd]));
+      const outstandingByPlayer = new Map(beforeSummary.players.map((item) => [item.playerId, item.outstandingCombinedNetVnd]));
       const deltaByPlayer = new Map<string, number>();
 
       for (const line of input.lines) {
@@ -1169,7 +1345,11 @@ export class MatchStakesService {
         outstandingBeforeClose: summary.players.map((item) => ({
           playerId: item.playerId,
           playerName: item.playerName,
-          outstandingNetVnd: item.outstandingNetVnd
+          outstandingNetVnd: item.outstandingNetVnd,
+          outstandingCombinedNetVnd: item.outstandingCombinedNetVnd,
+          matchNetVnd: item.matchNetVnd,
+          advanceNetVnd: item.advanceNetVnd,
+          combinedNetVnd: item.combinedNetVnd
         }))
       };
 
@@ -1272,6 +1452,8 @@ export class MatchStakesService {
       createdAt: string;
       note: string | null;
       amountVnd: number | null;
+      matchStakesImpactMode: MatchStakesImpactMode | null;
+      affectsDebt: boolean;
       playerId: string | null;
       secondaryPlayerId: string | null;
       debtPeriodId: string | null;
@@ -1287,6 +1469,9 @@ export class MatchStakesService {
     return toMatchStakesHistoryItem({
       id: event.id,
       itemType: event.eventType === "MATCH_STAKES_ADVANCE" ? "ADVANCE" : "NOTE",
+      eventType: event.eventType,
+      impactMode: event.matchStakesImpactMode ?? null,
+      affectsDebt: event.affectsDebt ?? false,
       eventStatus: event.eventStatus,
       resetAt: event.resetAt,
       resetReason: event.resetReason,
@@ -1390,22 +1575,60 @@ export class MatchStakesService {
         playerName: item.playerName,
         totalMatches: item.totalMatches,
         initNetVnd: item.initNetVnd,
+        accruedMatchNetVnd: item.accruedMatchNetVnd ?? item.accruedNetVnd,
+        accruedAdvanceNetVnd: item.accruedAdvanceNetVnd ?? 0,
+        accruedCombinedNetVnd: (item.accruedMatchNetVnd ?? item.accruedNetVnd) + (item.accruedAdvanceNetVnd ?? 0),
+        matchNetVnd: item.accruedMatchNetVnd ?? item.accruedNetVnd,
+        advanceNetVnd: item.accruedAdvanceNetVnd ?? 0,
+        combinedNetVnd: (item.accruedMatchNetVnd ?? item.accruedNetVnd) + (item.accruedAdvanceNetVnd ?? 0),
         accruedNetVnd: item.accruedNetVnd,
         settledPaidVnd: item.settledPaidVnd,
         settledReceivedVnd: item.settledReceivedVnd,
-        outstandingNetVnd: item.initNetVnd + item.accruedNetVnd - item.settledReceivedVnd + item.settledPaidVnd
+        outstandingCombinedNetVnd:
+          item.initNetVnd +
+          ((item.accruedMatchNetVnd ?? item.accruedNetVnd) + (item.accruedAdvanceNetVnd ?? 0)) -
+          item.settledReceivedVnd +
+          item.settledPaidVnd,
+        outstandingNetVnd:
+          item.initNetVnd +
+          ((item.accruedMatchNetVnd ?? item.accruedNetVnd) + (item.accruedAdvanceNetVnd ?? 0)) -
+          item.settledReceivedVnd +
+          item.settledPaidVnd
       }))
     );
 
     const summary: DebtPeriodSummarySnapshot = {
       totalMatches,
       totalPlayers: players.length,
+      totalMatchNetReceiveVnd: players.filter((item) => item.matchNetVnd > 0).reduce((sum, item) => sum + item.matchNetVnd, 0),
+      totalMatchNetPayVnd: players
+        .filter((item) => item.matchNetVnd < 0)
+        .reduce((sum, item) => sum + Math.abs(item.matchNetVnd), 0),
+      totalAdvanceNetReceiveVnd: players
+        .filter((item) => item.advanceNetVnd > 0)
+        .reduce((sum, item) => sum + item.advanceNetVnd, 0),
+      totalAdvanceNetPayVnd: players
+        .filter((item) => item.advanceNetVnd < 0)
+        .reduce((sum, item) => sum + Math.abs(item.advanceNetVnd), 0),
+      totalCombinedNetReceiveVnd: players
+        .filter((item) => item.combinedNetVnd > 0)
+        .reduce((sum, item) => sum + item.combinedNetVnd, 0),
+      totalCombinedNetPayVnd: players
+        .filter((item) => item.combinedNetVnd < 0)
+        .reduce((sum, item) => sum + Math.abs(item.combinedNetVnd), 0),
+      totalOutstandingCombinedReceiveVnd: players
+        .filter((item) => item.outstandingCombinedNetVnd > 0)
+        .reduce((sum, item) => sum + item.outstandingCombinedNetVnd, 0),
+      totalOutstandingCombinedPayVnd: players
+        .filter((item) => item.outstandingCombinedNetVnd < 0)
+        .reduce((sum, item) => sum + Math.abs(item.outstandingCombinedNetVnd), 0),
       totalOutstandingReceiveVnd: players
-        .filter((item) => item.outstandingNetVnd > 0)
-        .reduce((sum, item) => sum + item.outstandingNetVnd, 0),
+        .filter((item) => item.outstandingCombinedNetVnd > 0)
+        .reduce((sum, item) => sum + item.outstandingCombinedNetVnd, 0),
       totalOutstandingPayVnd: players
-        .filter((item) => item.outstandingNetVnd < 0)
-        .reduce((sum, item) => sum + Math.abs(item.outstandingNetVnd), 0)
+        .filter((item) => item.outstandingCombinedNetVnd < 0)
+        .reduce((sum, item) => sum + Math.abs(item.outstandingCombinedNetVnd), 0),
+      initialBalanceDecomposition: "COMBINED_ONLY"
     };
 
     return {

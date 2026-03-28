@@ -117,6 +117,9 @@ export interface UnifiedHistoryFeedItemRecord {
   id: string;
   module: ModuleType;
   itemType: string;
+  eventType: HistoryEventType | null;
+  impactMode: MatchStakesImpactMode | null;
+  affectsDebt: boolean | null;
   eventStatus: ModuleHistoryEventStatus | null;
   resetAt: string | null;
   resetReason: string | null;
@@ -144,6 +147,9 @@ interface UnifiedHistoryFeedRow {
   id: string;
   module: ModuleType;
   item_type: string;
+  event_type: HistoryEventType | null;
+  match_stakes_impact_mode: MatchStakesImpactMode | null;
+  affects_debt: boolean | null;
   event_status: ModuleHistoryEventStatus | null;
   reset_at: string | null;
   reset_reason: string | null;
@@ -173,6 +179,9 @@ function mapUnifiedHistoryItem(row: UnifiedHistoryFeedRow): UnifiedHistoryFeedIt
     id: row.id,
     module: row.module,
     itemType: row.item_type,
+    eventType: row.event_type,
+    impactMode: row.match_stakes_impact_mode,
+    affectsDebt: row.affects_debt,
     eventStatus: row.event_status,
     resetAt: row.reset_at,
     resetReason: row.reset_reason,
@@ -493,6 +502,10 @@ export class HistoryEventRepository {
       INNER JOIN module_history_events e ON e.id = i.history_event_id
       INNER JOIN players p ON p.id = i.player_id
       WHERE i.history_event_id = ANY($1::uuid[])
+        AND e.module = 'MATCH_STAKES'
+        AND e.event_type = 'MATCH_STAKES_ADVANCE'
+        AND e.match_stakes_impact_mode = 'AFFECTS_DEBT'
+        AND e.affects_debt = TRUE
         AND e.event_status = 'ACTIVE'
       ORDER BY i.created_at ASC, i.player_id ASC
       `,
@@ -588,6 +601,9 @@ export class HistoryEventRepository {
           m.id::text AS id,
           m.module,
           'MATCH'::text AS item_type,
+          NULL::history_event_type AS event_type,
+          NULL::match_stakes_impact_mode AS match_stakes_impact_mode,
+          NULL::boolean AS affects_debt,
           NULL::module_history_event_status AS event_status,
           NULL::timestamptz AS reset_at,
           NULL::text AS reset_reason,
@@ -631,6 +647,9 @@ export class HistoryEventRepository {
           s.id::text AS id,
           'MATCH_STAKES'::module_type AS module,
           'DEBT_SETTLEMENT'::text AS item_type,
+          NULL::history_event_type AS event_type,
+          NULL::match_stakes_impact_mode AS match_stakes_impact_mode,
+          NULL::boolean AS affects_debt,
           NULL::module_history_event_status AS event_status,
           NULL::timestamptz AS reset_at,
           NULL::text AS reset_reason,
@@ -674,6 +693,9 @@ export class HistoryEventRepository {
             WHEN e.event_type = 'MATCH_STAKES_NOTE' THEN 'NOTE'
             ELSE 'NOTE'
           END::text AS item_type,
+          e.event_type,
+          e.match_stakes_impact_mode,
+          e.affects_debt,
           e.event_status,
           e.reset_at,
           e.reset_reason,
@@ -721,6 +743,9 @@ export class HistoryEventRepository {
         id,
         module,
         item_type,
+        event_type,
+        match_stakes_impact_mode,
+        affects_debt,
         event_status,
         reset_at,
         reset_reason,
@@ -830,6 +855,9 @@ export class HistoryEventRepository {
           m.id::text AS id,
           m.module,
           'MATCH'::text AS item_type,
+          NULL::history_event_type AS event_type,
+          NULL::match_stakes_impact_mode AS match_stakes_impact_mode,
+          NULL::boolean AS affects_debt,
           NULL::module_history_event_status AS event_status,
           NULL::timestamptz AS reset_at,
           NULL::text AS reset_reason,
@@ -871,6 +899,9 @@ export class HistoryEventRepository {
           e.id::text AS id,
           'GROUP_FUND'::module_type AS module,
           'MANUAL_TRANSACTION'::text AS item_type,
+          NULL::history_event_type AS event_type,
+          NULL::match_stakes_impact_mode AS match_stakes_impact_mode,
+          NULL::boolean AS affects_debt,
           NULL::module_history_event_status AS event_status,
           NULL::timestamptz AS reset_at,
           NULL::text AS reset_reason,
@@ -922,6 +953,9 @@ export class HistoryEventRepository {
             WHEN e.event_type = 'GROUP_FUND_CONTRIBUTION' THEN 'CONTRIBUTION'
             ELSE 'NOTE'
           END::text AS item_type,
+          e.event_type,
+          NULL::match_stakes_impact_mode AS match_stakes_impact_mode,
+          NULL::boolean AS affects_debt,
           e.event_status,
           e.reset_at,
           e.reset_reason,
@@ -969,6 +1003,9 @@ export class HistoryEventRepository {
         id,
         module,
         item_type,
+        event_type,
+        match_stakes_impact_mode,
+        affects_debt,
         event_status,
         reset_at,
         reset_reason,

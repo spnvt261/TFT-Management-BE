@@ -363,18 +363,46 @@ export function createMockServices(): AppServices {
 
     const playersSummary = Array.from(playerSummaryMap.values()).map((player) => ({
       ...player,
+      accruedMatchNetVnd: player.accruedNetVnd,
+      accruedAdvanceNetVnd: 0,
+      accruedCombinedNetVnd: player.accruedNetVnd,
+      matchNetVnd: player.accruedNetVnd,
+      advanceNetVnd: 0,
+      combinedNetVnd: player.accruedNetVnd,
+      outstandingCombinedNetVnd: player.initNetVnd + player.accruedNetVnd - player.settledReceivedVnd + player.settledPaidVnd,
       outstandingNetVnd: player.initNetVnd + player.accruedNetVnd - player.settledReceivedVnd + player.settledPaidVnd
     }));
 
     const summary = {
       totalMatches: scopedMatches.length,
       totalPlayers: playersSummary.length,
+      totalMatchNetReceiveVnd: playersSummary
+        .filter((player) => player.matchNetVnd > 0)
+        .reduce((sum, player) => sum + player.matchNetVnd, 0),
+      totalMatchNetPayVnd: playersSummary
+        .filter((player) => player.matchNetVnd < 0)
+        .reduce((sum, player) => sum + Math.abs(player.matchNetVnd), 0),
+      totalAdvanceNetReceiveVnd: 0,
+      totalAdvanceNetPayVnd: 0,
+      totalCombinedNetReceiveVnd: playersSummary
+        .filter((player) => player.combinedNetVnd > 0)
+        .reduce((sum, player) => sum + player.combinedNetVnd, 0),
+      totalCombinedNetPayVnd: playersSummary
+        .filter((player) => player.combinedNetVnd < 0)
+        .reduce((sum, player) => sum + Math.abs(player.combinedNetVnd), 0),
+      totalOutstandingCombinedReceiveVnd: playersSummary
+        .filter((player) => player.outstandingCombinedNetVnd > 0)
+        .reduce((sum, player) => sum + player.outstandingCombinedNetVnd, 0),
+      totalOutstandingCombinedPayVnd: playersSummary
+        .filter((player) => player.outstandingCombinedNetVnd < 0)
+        .reduce((sum, player) => sum + Math.abs(player.outstandingCombinedNetVnd), 0),
       totalOutstandingReceiveVnd: playersSummary
         .filter((player) => player.outstandingNetVnd > 0)
         .reduce((sum, player) => sum + player.outstandingNetVnd, 0),
       totalOutstandingPayVnd: playersSummary
         .filter((player) => player.outstandingNetVnd < 0)
-        .reduce((sum, player) => sum + Math.abs(player.outstandingNetVnd), 0)
+        .reduce((sum, player) => sum + Math.abs(player.outstandingNetVnd), 0),
+      initialBalanceDecomposition: "COMBINED_ONLY"
     };
 
     return {
@@ -426,6 +454,12 @@ export function createMockServices(): AppServices {
             playerName: player.playerName,
             tftPlacement: participant?.tftPlacement ?? null,
             relativeRank: participant?.relativeRank ?? null,
+            matchDeltaVnd: matchNetVnd,
+            advanceDeltaVnd: 0,
+            combinedDeltaVnd: matchNetVnd,
+            cumulativeMatchNetVnd: cumulativeNetVnd,
+            cumulativeAdvanceNetVnd: 0,
+            cumulativeCombinedNetVnd: cumulativeNetVnd,
             matchNetVnd,
             cumulativeNetVnd
           };
@@ -454,8 +488,12 @@ export function createMockServices(): AppServices {
         status: match.status,
         amountVnd: null,
         note: null,
+        eventStatus: null,
         affectsDebt: null,
         impactMode: null,
+        debtImpactBucket: "MATCH" as const,
+        debtImpactActive: true,
+        initialBalanceDecomposition: null,
         metadata: null,
         rows
       };
@@ -474,8 +512,12 @@ export function createMockServices(): AppServices {
         status: null,
         amountVnd: null,
         note: null,
+        eventStatus: null,
         affectsDebt: null,
         impactMode: null,
+        debtImpactBucket: null,
+        debtImpactActive: null,
+        initialBalanceDecomposition: "COMBINED_ONLY",
         metadata: null,
         rows: playerScope
           .map((player) => ({
@@ -483,6 +525,12 @@ export function createMockServices(): AppServices {
             playerName: player.playerName,
             tftPlacement: null,
             relativeRank: null,
+            matchDeltaVnd: 0,
+            advanceDeltaVnd: 0,
+            combinedDeltaVnd: initByPlayer.get(player.playerId) ?? 0,
+            cumulativeMatchNetVnd: 0,
+            cumulativeAdvanceNetVnd: 0,
+            cumulativeCombinedNetVnd: initByPlayer.get(player.playerId) ?? 0,
             matchNetVnd: initByPlayer.get(player.playerId) ?? 0,
             cumulativeNetVnd: initByPlayer.get(player.playerId) ?? 0
           }))

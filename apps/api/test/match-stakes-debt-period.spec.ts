@@ -122,6 +122,91 @@ describe("match-stakes debt period service", () => {
     expect(result.players[0]?.outstandingNetVnd).toBe(65000);
   });
 
+  it("separates match-only, advance-only, and combined nets in player summary", async () => {
+    const { service, repositories } = createFixture();
+    repositories.matchStakesDebt.getCurrentOpenPeriod.mockResolvedValue(openPeriod);
+    repositories.matchStakesDebt.listPeriodPlayerAggregates.mockResolvedValue([
+      {
+        playerId: "10000000-0000-4000-8000-000000000001",
+        playerName: "An",
+        totalMatches: 2,
+        initNetVnd: 0,
+        accruedMatchNetVnd: 100000,
+        accruedAdvanceNetVnd: 30000,
+        accruedNetVnd: 130000,
+        settledPaidVnd: 0,
+        settledReceivedVnd: 0
+      },
+      {
+        playerId: "10000000-0000-4000-8000-000000000002",
+        playerName: "Binh",
+        totalMatches: 2,
+        initNetVnd: 0,
+        accruedMatchNetVnd: -100000,
+        accruedAdvanceNetVnd: -30000,
+        accruedNetVnd: -130000,
+        settledPaidVnd: 0,
+        settledReceivedVnd: 0
+      }
+    ]);
+    repositories.matchStakesDebt.countNonVoidedMatchesInPeriod.mockResolvedValue(2);
+
+    const result = await service.getCurrentDebtPeriod();
+    const an = result.players.find((item) => item.playerId === "10000000-0000-4000-8000-000000000001");
+    const binh = result.players.find((item) => item.playerId === "10000000-0000-4000-8000-000000000002");
+
+    expect(an?.matchNetVnd).toBe(100000);
+    expect(an?.advanceNetVnd).toBe(30000);
+    expect(an?.combinedNetVnd).toBe(130000);
+    expect(an?.outstandingCombinedNetVnd).toBe(130000);
+
+    expect(binh?.matchNetVnd).toBe(-100000);
+    expect(binh?.advanceNetVnd).toBe(-30000);
+    expect(binh?.combinedNetVnd).toBe(-130000);
+    expect(binh?.outstandingCombinedNetVnd).toBe(-130000);
+
+    expect(result.summary.totalMatchNetReceiveVnd).toBe(100000);
+    expect(result.summary.totalAdvanceNetReceiveVnd).toBe(30000);
+    expect(result.summary.totalCombinedNetReceiveVnd).toBe(130000);
+  });
+
+  it("supports advance-only period where match-only stays zero", async () => {
+    const { service, repositories } = createFixture();
+    repositories.matchStakesDebt.getCurrentOpenPeriod.mockResolvedValue(openPeriod);
+    repositories.matchStakesDebt.listPeriodPlayerAggregates.mockResolvedValue([
+      {
+        playerId: "10000000-0000-4000-8000-000000000001",
+        playerName: "An",
+        totalMatches: 0,
+        initNetVnd: 0,
+        accruedMatchNetVnd: 0,
+        accruedAdvanceNetVnd: 37500,
+        accruedNetVnd: 37500,
+        settledPaidVnd: 0,
+        settledReceivedVnd: 0
+      },
+      {
+        playerId: "10000000-0000-4000-8000-000000000002",
+        playerName: "Binh",
+        totalMatches: 0,
+        initNetVnd: 0,
+        accruedMatchNetVnd: 0,
+        accruedAdvanceNetVnd: -37500,
+        accruedNetVnd: -37500,
+        settledPaidVnd: 0,
+        settledReceivedVnd: 0
+      }
+    ]);
+    repositories.matchStakesDebt.countNonVoidedMatchesInPeriod.mockResolvedValue(0);
+
+    const result = await service.getCurrentDebtPeriod();
+    const an = result.players.find((item) => item.playerId === "10000000-0000-4000-8000-000000000001");
+
+    expect(an?.matchNetVnd).toBe(0);
+    expect(an?.advanceNetVnd).toBe(37500);
+    expect(an?.combinedNetVnd).toBe(37500);
+  });
+
   it("lists and expands debt periods with cumulative totals", async () => {
     const { service, repositories } = createFixture();
     repositories.matchStakesDebt.listPeriods.mockResolvedValue({
@@ -418,6 +503,98 @@ describe("match-stakes debt period service", () => {
 
     expect(result.timeline).toHaveLength(1);
     expect(result.timeline[0]?.type).toBe("MATCH");
+  });
+
+  it("keeps RESET advance row visible but excludes it from active cumulative advance debt", async () => {
+    const { service, repositories } = createFixture();
+    repositories.matchStakesDebt.getPeriodById.mockResolvedValue(openPeriod);
+    repositories.matchStakesDebt.listPeriodPlayerAggregates.mockResolvedValue([
+      {
+        playerId: "10000000-0000-4000-8000-000000000001",
+        playerName: "An",
+        totalMatches: 1,
+        initNetVnd: 0,
+        accruedMatchNetVnd: 100000,
+        accruedAdvanceNetVnd: 0,
+        accruedNetVnd: 100000,
+        settledPaidVnd: 0,
+        settledReceivedVnd: 0
+      },
+      {
+        playerId: "10000000-0000-4000-8000-000000000002",
+        playerName: "Binh",
+        totalMatches: 1,
+        initNetVnd: 0,
+        accruedMatchNetVnd: -100000,
+        accruedAdvanceNetVnd: 0,
+        accruedNetVnd: -100000,
+        settledPaidVnd: 0,
+        settledReceivedVnd: 0
+      }
+    ]);
+    repositories.matchStakesDebt.countNonVoidedMatchesInPeriod.mockResolvedValue(1);
+    repositories.matchStakesDebt.listNonVoidedPeriodMatches.mockResolvedValue([
+      {
+        id: "match-1",
+        playedAt: "2026-01-01T00:00:00.000Z",
+        participantCount: 2,
+        status: "POSTED",
+        createdAt: "2026-01-01T00:00:00.000Z"
+      }
+    ]);
+    repositories.matchStakesDebt.listMatchParticipantsByMatchIds.mockResolvedValue([
+      {
+        matchId: "match-1",
+        playerId: "10000000-0000-4000-8000-000000000001",
+        playerName: "An",
+        tftPlacement: 1,
+        relativeRank: 1,
+        settlementNetVnd: 100000
+      },
+      {
+        matchId: "match-1",
+        playerId: "10000000-0000-4000-8000-000000000002",
+        playerName: "Binh",
+        tftPlacement: 2,
+        relativeRank: 2,
+        settlementNetVnd: -100000
+      }
+    ]);
+    repositories.historyEvents.listMatchStakesPeriodEvents.mockResolvedValue([
+      {
+        id: "event-reset-advance",
+        eventType: "MATCH_STAKES_ADVANCE",
+        eventStatus: "RESET",
+        resetAt: "2026-01-03T00:00:00.000Z",
+        resetReason: "wrong advance",
+        postedAt: "2026-01-03T00:00:00.000Z",
+        createdAt: "2026-01-03T00:00:00.000Z",
+        amountVnd: 50000,
+        note: "advance reset",
+        impactMode: "AFFECTS_DEBT",
+        affectsDebt: true,
+        playerId: "10000000-0000-4000-8000-000000000001",
+        playerName: "An",
+        outstandingBeforeVnd: 100000,
+        outstandingAfterVnd: 150000,
+        metadata: {}
+      }
+    ]);
+    repositories.historyEvents.listMatchStakesPeriodEventImpacts.mockResolvedValue([]);
+
+    const result = await service.getDebtPeriodTimeline(openPeriod.id);
+    const advanceRow = result.timeline.find((item) => item.type === "ADVANCE");
+    expect(advanceRow).toBeTruthy();
+    expect(advanceRow?.eventStatus).toBe("RESET");
+    expect(advanceRow?.debtImpactBucket).toBe("ADVANCE");
+    expect(advanceRow?.debtImpactActive).toBe(false);
+
+    const an = advanceRow?.rows.find((row) => row.playerId === "10000000-0000-4000-8000-000000000001");
+    expect(an?.matchDeltaVnd).toBe(0);
+    expect(an?.advanceDeltaVnd).toBe(0);
+    expect(an?.cumulativeMatchNetVnd).toBe(100000);
+    expect(an?.cumulativeAdvanceNetVnd).toBe(0);
+    expect(an?.cumulativeCombinedNetVnd).toBe(100000);
   });
 
   it("records settlement lines and returns updated summary", async () => {

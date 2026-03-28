@@ -6,12 +6,14 @@ import type { AppServices } from "../../core/types/container.js";
 import { errorResponseSchemas, paginationMetaSchema, successResponseSchema, toSwaggerSchema } from "../../core/docs/swagger.js";
 import { debtPeriodStatusSchema, matchStakesImpactModeSchema, moduleHistoryEventStatusSchema } from "../../domain/models/enums.js";
 
+const MATCH_STAKES_MAX_PAGE_SIZE = 500;
+
 const querySchema = z.object({
   playerId: uuidSchema.optional(),
   from: z.string().datetime().optional(),
   to: z.string().datetime().optional(),
   page: z.coerce.number().int().positive().default(1),
-  pageSize: z.coerce.number().int().positive().max(100).default(20)
+  pageSize: z.coerce.number().int().positive().max(MATCH_STAKES_MAX_PAGE_SIZE).default(20)
 });
 
 const summaryQuerySchema = z.object({ from: z.string().datetime().optional(), to: z.string().datetime().optional() });
@@ -114,7 +116,7 @@ const matchStakesHistoryQuerySchema = z.object({
   to: z.string().datetime().optional(),
   itemTypes: historyItemTypesQuerySchema,
   page: z.coerce.number().int().positive().default(1),
-  pageSize: z.coerce.number().int().positive().max(100).default(20)
+  pageSize: z.coerce.number().int().positive().max(MATCH_STAKES_MAX_PAGE_SIZE).default(20)
 });
 
 const matchStakesImpactModeInputSchema = z
@@ -231,17 +233,33 @@ const debtPeriodPlayerSummarySchema = z.object({
   playerName: z.string(),
   totalMatches: z.number().int().nonnegative(),
   initNetVnd: z.number().int(),
+  accruedMatchNetVnd: z.number().int(),
+  accruedAdvanceNetVnd: z.number().int(),
+  accruedCombinedNetVnd: z.number().int(),
+  matchNetVnd: z.number().int(),
+  advanceNetVnd: z.number().int(),
+  combinedNetVnd: z.number().int(),
   accruedNetVnd: z.number().int(),
   settledPaidVnd: z.number().int().nonnegative(),
   settledReceivedVnd: z.number().int().nonnegative(),
+  outstandingCombinedNetVnd: z.number().int(),
   outstandingNetVnd: z.number().int()
 });
 
 const debtPeriodSummarySchema = z.object({
   totalMatches: z.number().int().nonnegative(),
   totalPlayers: z.number().int().nonnegative(),
+  totalMatchNetReceiveVnd: z.number().int().nonnegative(),
+  totalMatchNetPayVnd: z.number().int().nonnegative(),
+  totalAdvanceNetReceiveVnd: z.number().int().nonnegative(),
+  totalAdvanceNetPayVnd: z.number().int().nonnegative(),
+  totalCombinedNetReceiveVnd: z.number().int().nonnegative(),
+  totalCombinedNetPayVnd: z.number().int().nonnegative(),
+  totalOutstandingCombinedReceiveVnd: z.number().int().nonnegative(),
+  totalOutstandingCombinedPayVnd: z.number().int().nonnegative(),
   totalOutstandingReceiveVnd: z.number().int().nonnegative(),
-  totalOutstandingPayVnd: z.number().int().nonnegative()
+  totalOutstandingPayVnd: z.number().int().nonnegative(),
+  initialBalanceDecomposition: z.literal("COMBINED_ONLY")
 });
 
 const debtPeriodCurrentResponseSchema = z.object({
@@ -253,8 +271,17 @@ const debtPeriodCurrentResponseSchema = z.object({
 const debtPeriodListItemSchema = debtPeriodSchema.extend({
   totalMatches: z.number().int().nonnegative(),
   totalPlayers: z.number().int().nonnegative(),
+  totalMatchNetReceiveVnd: z.number().int().nonnegative(),
+  totalMatchNetPayVnd: z.number().int().nonnegative(),
+  totalAdvanceNetReceiveVnd: z.number().int().nonnegative(),
+  totalAdvanceNetPayVnd: z.number().int().nonnegative(),
+  totalCombinedNetReceiveVnd: z.number().int().nonnegative(),
+  totalCombinedNetPayVnd: z.number().int().nonnegative(),
+  totalOutstandingCombinedReceiveVnd: z.number().int().nonnegative(),
+  totalOutstandingCombinedPayVnd: z.number().int().nonnegative(),
   totalOutstandingReceiveVnd: z.number().int().nonnegative(),
-  totalOutstandingPayVnd: z.number().int().nonnegative()
+  totalOutstandingPayVnd: z.number().int().nonnegative(),
+  initialBalanceDecomposition: z.literal("COMBINED_ONLY")
 });
 
 const debtSettlementLineSchema = z.object({
@@ -300,6 +327,12 @@ const debtPeriodTimelinePlayerRowSchema = z.object({
   playerName: z.string(),
   tftPlacement: z.number().int().nullable(),
   relativeRank: z.number().int().nullable(),
+  matchDeltaVnd: z.number().int(),
+  advanceDeltaVnd: z.number().int(),
+  combinedDeltaVnd: z.number().int(),
+  cumulativeMatchNetVnd: z.number().int(),
+  cumulativeAdvanceNetVnd: z.number().int(),
+  cumulativeCombinedNetVnd: z.number().int(),
   matchNetVnd: z.number().int(),
   cumulativeNetVnd: z.number().int()
 });
@@ -315,8 +348,12 @@ const debtPeriodTimelineItemSchema = z.object({
   status: z.string().nullable(),
   amountVnd: z.number().int().nullable(),
   note: z.string().nullable(),
+  eventStatus: moduleHistoryEventStatusSchema.nullable(),
   affectsDebt: z.boolean().nullable(),
   impactMode: matchStakesImpactModeSchema.nullable(),
+  debtImpactBucket: z.union([z.literal("MATCH"), z.literal("ADVANCE")]).nullable(),
+  debtImpactActive: z.boolean().nullable(),
+  initialBalanceDecomposition: z.literal("COMBINED_ONLY").nullable(),
   metadata: z.unknown().nullable(),
   rows: z.array(debtPeriodTimelinePlayerRowSchema)
 });
@@ -352,6 +389,22 @@ const unifiedHistoryItemSchema = z.object({
   id: uuidSchema,
   module: z.literal("MATCH_STAKES"),
   itemType: z.string(),
+  eventType: z.string().nullable(),
+  impactMode: matchStakesImpactModeSchema.nullable(),
+  affectsDebt: z.boolean().nullable(),
+  advancerPlayerId: uuidSchema.nullable(),
+  participantPlayerIds: z.array(uuidSchema).nullable(),
+  impactLines: z
+    .array(
+      z.object({
+        playerId: uuidSchema,
+        allocatedShareVnd: z.number().int().nullable(),
+        netDeltaVnd: z.number().int()
+      })
+    )
+    .nullable(),
+  debtImpactBucket: z.union([z.literal("MATCH"), z.literal("ADVANCE")]).nullable(),
+  debtImpactActive: z.boolean().nullable(),
   eventStatus: moduleHistoryEventStatusSchema.nullable(),
   resetAt: z.string().nullable(),
   resetReason: z.string().nullable(),
