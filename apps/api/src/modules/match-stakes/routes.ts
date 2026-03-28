@@ -109,6 +109,25 @@ const matchStakesHistoryQuerySchema = z.object({
   pageSize: z.coerce.number().int().positive().max(100).default(20)
 });
 
+const matchStakesImpactModeInputSchema = z
+  .union([matchStakesImpactModeSchema, z.literal("INFORMATION_ONLY")])
+  .transform((value) => (value === "INFORMATION_ONLY" ? "INFORMATIONAL" : value));
+
+// Keep Fastify body schema as a flat object to avoid oneOf + removeAdditional
+// mutating request.body before the explicit Zod parse in the handler.
+const createMatchStakesHistoryEventRouteBodySchema = z
+  .object({
+    eventType: z.enum(["MATCH_STAKES_ADVANCE", "MATCH_STAKES_NOTE"]),
+    postedAt: z.string().datetime().optional(),
+    playerId: uuidSchema.optional(),
+    amountVnd: z.union([z.number(), z.string()]).optional(),
+    note: z.union([z.string(), z.null()]).optional(),
+    impactMode: z.union([matchStakesImpactModeSchema, z.literal("INFORMATION_ONLY")]).optional(),
+    beneficiaryPlayerIds: z.array(uuidSchema).min(1).optional(),
+    debtPeriodId: uuidSchema.optional()
+  })
+  .passthrough();
+
 const createMatchStakesHistoryEventBodySchema = z
   .discriminatedUnion("eventType", [
     z.object({
@@ -117,7 +136,7 @@ const createMatchStakesHistoryEventBodySchema = z
       playerId: uuidSchema,
       amountVnd: z.coerce.number().int().positive(),
       note: z.string().max(4000).nullable().optional(),
-      impactMode: matchStakesImpactModeSchema.optional(),
+      impactMode: matchStakesImpactModeInputSchema.optional(),
       beneficiaryPlayerIds: z.array(uuidSchema).min(1).optional(),
       debtPeriodId: uuidSchema.optional()
     }),
@@ -562,7 +581,7 @@ export async function registerMatchStakesRoutes(app: FastifyInstance, services: 
       schema: {
         tags: ["Match Stakes"],
         summary: "Create non-match history event for match-stakes timeline",
-        body: toSwaggerSchema(createMatchStakesHistoryEventBodySchema),
+        body: toSwaggerSchema(createMatchStakesHistoryEventRouteBodySchema),
         response: {
           201: successResponseSchema(createMatchStakesHistoryEventResponseSchema),
           ...errorResponseSchemas
