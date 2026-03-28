@@ -446,10 +446,17 @@ export function createMockServices(): AppServices {
       return {
         type: "MATCH" as const,
         matchId: match.id,
+        eventId: null,
+        eventType: null,
         playedAt: match.playedAt,
         matchNo: match.periodMatchNo ?? index + 1,
         participantCount: match.participantCount,
         status: match.status,
+        amountVnd: null,
+        note: null,
+        affectsDebt: null,
+        impactMode: null,
+        metadata: null,
         rows
       };
     });
@@ -459,10 +466,17 @@ export function createMockServices(): AppServices {
       timeline.push({
         type: "INITIAL" as const,
         matchId: null,
+        eventId: null,
+        eventType: null,
         playedAt: null,
         matchNo: null,
         participantCount: null,
         status: null,
+        amountVnd: null,
+        note: null,
+        affectsDebt: null,
+        impactMode: null,
+        metadata: null,
         rows: playerScope
           .map((player) => ({
             playerId: player.playerId,
@@ -1378,13 +1392,18 @@ export function createMockServices(): AppServices {
         module: "GROUP_FUND",
         fundBalanceVnd: 0,
         totalMatches: Array.from(matches.values()).filter((item) => item.module === "GROUP_FUND").length,
+        negativeBalanceAllowed: true,
+        totalRegularContributionsVnd: 0,
+        totalAdvancesVnd: 0,
+        advancesByPlayers: [],
         players: Array.from(players.values()).map((item) => ({
           playerId: item.id,
           playerName: item.displayName,
           totalContributedVnd: 0,
           currentObligationVnd: 0,
           netObligationVnd: 0,
-          prepaidVnd: 0
+          prepaidVnd: 0,
+          totalAdvancedVnd: 0
         })),
         range: { from: null, to: null }
       }),

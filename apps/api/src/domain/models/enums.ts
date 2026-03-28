@@ -44,6 +44,19 @@ export type AccountType = (typeof accountTypeValues)[number];
 export const debtPeriodStatusValues = ["OPEN", "CLOSED"] as const;
 export type DebtPeriodStatus = (typeof debtPeriodStatusValues)[number];
 
+export const historyEventTypeValues = [
+  "MATCH_STAKES_ADVANCE",
+  "MATCH_STAKES_NOTE",
+  "GROUP_FUND_ADVANCE",
+  "GROUP_FUND_NOTE",
+  "GROUP_FUND_ADJUSTMENT",
+  "GROUP_FUND_CONTRIBUTION"
+] as const;
+export type HistoryEventType = (typeof historyEventTypeValues)[number];
+
+export const matchStakesImpactModeValues = ["INFORMATIONAL", "AFFECTS_DEBT"] as const;
+export type MatchStakesImpactMode = (typeof matchStakesImpactModeValues)[number];
+
 export const moduleTypeSchema = z.enum(moduleTypeValues);
 export const matchStatusSchema = z.enum(matchStatusValues);
 export const ruleStatusSchema = z.enum(ruleStatusValues);
@@ -53,3 +66,5 @@ export const actionTypeSchema = z.enum(actionTypeValues);
 export const selectorTypeSchema = z.enum(selectorTypeValues);
 export const accountTypeSchema = z.enum(accountTypeValues);
 export const debtPeriodStatusSchema = z.enum(debtPeriodStatusValues);
+export const historyEventTypeSchema = z.enum(historyEventTypeValues);
+export const matchStakesImpactModeSchema = z.enum(matchStakesImpactModeValues);

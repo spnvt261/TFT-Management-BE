@@ -58,6 +58,13 @@ function createFixture() {
       closeOpenPeriod: vi.fn(),
       replacePeriodInitBalances: vi.fn(),
       setNextPeriodId: vi.fn()
+    },
+    historyEvents: {
+      listMatchStakesHistory: vi.fn(),
+      listMatchStakesPeriodEvents: vi.fn().mockResolvedValue([]),
+      listMatchStakesPeriodEventImpacts: vi.fn().mockResolvedValue([]),
+      createEvent: vi.fn(),
+      insertMatchStakesImpacts: vi.fn()
     }
   } as any;
 

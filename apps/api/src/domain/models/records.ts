@@ -1,4 +1,4 @@
-import type { DebtPeriodStatus, ModuleType } from "./enums.js";
+import type { DebtPeriodStatus, HistoryEventType, MatchStakesImpactMode, ModuleType } from "./enums.js";
 
 export interface GroupRecord {
   id: string;
@@ -122,6 +122,31 @@ export interface MatchStakesDebtPeriodRecord {
   status: DebtPeriodStatus;
   openedAt: string;
   closedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ModuleHistoryEventRecord {
+  id: string;
+  groupId: string;
+  module: ModuleType;
+  eventType: HistoryEventType;
+  postedAt: string;
+  note: string | null;
+  amountVnd: number | null;
+  matchStakesImpactMode: MatchStakesImpactMode | null;
+  affectsDebt: boolean;
+  playerId: string | null;
+  secondaryPlayerId: string | null;
+  debtPeriodId: string | null;
+  matchId: string | null;
+  ledgerBatchId: string | null;
+  balanceBeforeVnd: number | null;
+  balanceAfterVnd: number | null;
+  outstandingBeforeVnd: number | null;
+  outstandingAfterVnd: number | null;
+  metadataJson: unknown;
+  createdByRoleCode: string | null;
   createdAt: string;
   updatedAt: string;
 }

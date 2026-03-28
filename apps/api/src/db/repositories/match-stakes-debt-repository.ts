@@ -322,6 +322,15 @@ export class MatchStakesDebtRepository {
           AND s.debt_period_id = $2
         GROUP BY l.receiver_player_id
       ),
+      event_agg AS (
+        SELECT
+          i.player_id,
+          COALESCE(SUM(i.net_delta_vnd), 0)::bigint AS event_net_vnd
+        FROM match_stakes_history_event_player_impacts i
+        WHERE i.group_id = $1
+          AND i.debt_period_id = $2
+        GROUP BY i.player_id
+      ),
       activity_players AS (
         SELECT player_id FROM init_agg
         UNION
@@ -330,6 +339,8 @@ export class MatchStakesDebtRepository {
         SELECT player_id FROM paid_agg
         UNION
         SELECT player_id FROM received_agg
+        UNION
+        SELECT player_id FROM event_agg
       ),
       player_scope AS (
         SELECT ap.player_id, ap.player_name
@@ -344,7 +355,7 @@ export class MatchStakesDebtRepository {
         ps.player_name,
         COALESCE(ma.total_matches, 0) AS total_matches,
         COALESCE(ia.init_net_vnd, 0) AS init_net_vnd,
-        COALESCE(ma.accrued_net_vnd, 0) AS accrued_net_vnd,
+        (COALESCE(ma.accrued_net_vnd, 0) + COALESCE(ea.event_net_vnd, 0))::bigint AS accrued_net_vnd,
         COALESCE(pa.settled_paid_vnd, 0) AS settled_paid_vnd,
         COALESCE(ra.settled_received_vnd, 0) AS settled_received_vnd
       FROM player_scope ps
@@ -352,6 +363,7 @@ export class MatchStakesDebtRepository {
       LEFT JOIN match_agg ma ON ma.player_id = ps.player_id
       LEFT JOIN paid_agg pa ON pa.player_id = ps.player_id
       LEFT JOIN received_agg ra ON ra.player_id = ps.player_id
+      LEFT JOIN event_agg ea ON ea.player_id = ps.player_id
       `,
       [groupId, periodId]
     );

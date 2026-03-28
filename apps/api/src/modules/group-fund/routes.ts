@@ -22,6 +22,22 @@ const markGroupFundContributionSchema = z.object({
   postedAt: z.string().datetime().optional()
 });
 
+const createGroupFundAdvanceSchema = z.object({
+  playerId: uuidSchema,
+  amountVnd: z.coerce.number().int().positive(),
+  note: z.string().max(2000).nullable().optional(),
+  postedAt: z.string().datetime().optional()
+});
+
+const createGroupFundHistoryEventSchema = z.discriminatedUnion("eventType", [
+  z.object({
+    eventType: z.literal("GROUP_FUND_NOTE"),
+    note: z.string().min(1).max(4000),
+    playerId: uuidSchema.optional(),
+    postedAt: z.string().datetime().optional()
+  })
+]);
+
 const createGroupFundTransactionSchema = z
   .object({
     transactionType: groupFundTransactionTypeSchema,
@@ -58,10 +74,57 @@ const listGroupFundTransactionsQuerySchema = z.object({
   pageSize: z.coerce.number().int().positive().max(100).default(20)
 });
 
+const historyItemTypeSchema = z.enum(["MATCH", "MANUAL_TRANSACTION", "ADVANCE", "NOTE", "ADJUSTMENT", "CONTRIBUTION"]);
+const historyItemTypesQuerySchema = z
+  .preprocess((value) => {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+
+    if (Array.isArray(value)) {
+      return value.flatMap((item) =>
+        String(item)
+          .split(",")
+          .map((token) => token.trim())
+          .filter((token) => token.length > 0)
+      );
+    }
+
+    if (typeof value === "string") {
+      return value
+        .split(",")
+        .map((token) => token.trim())
+        .filter((token) => token.length > 0);
+    }
+
+    return value;
+  }, z.array(historyItemTypeSchema))
+  .optional();
+
+const groupFundHistoryQuerySchema = z.object({
+  playerId: uuidSchema.optional(),
+  from: z.string().datetime().optional(),
+  to: z.string().datetime().optional(),
+  itemTypes: historyItemTypesQuerySchema,
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().positive().max(100).default(20)
+});
+
 const groupFundSummarySchema = z.object({
   module: z.literal("GROUP_FUND"),
   fundBalanceVnd: z.number().int(),
   totalMatches: z.number().int().nonnegative(),
+  negativeBalanceAllowed: z.literal(true),
+  totalRegularContributionsVnd: z.number().int(),
+  totalAdvancesVnd: z.number().int(),
+  advancesByPlayers: z.array(
+    z.object({
+      playerId: uuidSchema,
+      playerName: z.string(),
+      totalAdvancedVnd: z.number().int(),
+      lastAdvancedAt: z.string()
+    })
+  ),
   players: z.array(
     z.object({
       playerId: uuidSchema,
@@ -69,7 +132,8 @@ const groupFundSummarySchema = z.object({
       totalContributedVnd: z.number().int(),
       currentObligationVnd: z.number().int(),
       netObligationVnd: z.number().int(),
-      prepaidVnd: z.number().int().nonnegative()
+      prepaidVnd: z.number().int().nonnegative(),
+      totalAdvancedVnd: z.number().int().nonnegative()
     })
   ),
   range: z.object({
@@ -138,6 +202,47 @@ const markGroupFundContributionResponseSchema = z.object({
   note: z.string().nullable()
 });
 
+const unifiedGroupFundHistoryItemSchema = z.object({
+  id: uuidSchema,
+  module: z.literal("GROUP_FUND"),
+  itemType: z.string(),
+  postedAt: z.string(),
+  createdAt: z.string(),
+  title: z.string(),
+  description: z.string().nullable(),
+  amountVnd: z.number().int().nullable(),
+  player: z
+    .object({
+      id: uuidSchema,
+      name: z.string()
+    })
+    .nullable(),
+  secondaryPlayer: z
+    .object({
+      id: uuidSchema,
+      name: z.string()
+    })
+    .nullable(),
+  matchId: uuidSchema.nullable(),
+  debtPeriodId: uuidSchema.nullable(),
+  ledgerBatchId: uuidSchema.nullable(),
+  balanceBeforeVnd: z.number().int().nullable(),
+  balanceAfterVnd: z.number().int().nullable(),
+  outstandingBeforeVnd: z.number().int().nullable(),
+  outstandingAfterVnd: z.number().int().nullable(),
+  note: z.string().nullable(),
+  metadata: z.unknown()
+});
+
+const groupFundAdvanceResponseSchema = z.object({
+  batchId: uuidSchema,
+  event: unifiedGroupFundHistoryItemSchema
+});
+
+const groupFundHistoryEventResponseSchema = z.object({
+  event: unifiedGroupFundHistoryItemSchema
+});
+
 export async function registerGroupFundRoutes(app: FastifyInstance, services: AppServices): Promise<void> {
   app.post(
     "/group-fund/contributions",
@@ -158,7 +263,63 @@ export async function registerGroupFundRoutes(app: FastifyInstance, services: Ap
         playerId: input.playerId,
         amountVnd: input.amountVnd,
         note: input.note,
-        postedAt: input.postedAt
+        postedAt: input.postedAt,
+        createdByRoleCode: request.authUser?.roleCode ?? null
+      });
+
+      reply.status(201);
+      return ok(created);
+    }
+  );
+
+  app.post(
+    "/group-fund/advances",
+    {
+      schema: {
+        tags: ["Group Fund"],
+        summary: "Record player advancing personal money into the group fund",
+        body: toSwaggerSchema(createGroupFundAdvanceSchema),
+        response: {
+          201: successResponseSchema(groupFundAdvanceResponseSchema),
+          ...errorResponseSchemas
+        }
+      }
+    },
+    async (request, reply) => {
+      const input = createGroupFundAdvanceSchema.parse(request.body);
+      const created = await services.groupFund.createAdvance({
+        playerId: input.playerId,
+        amountVnd: input.amountVnd,
+        note: input.note,
+        postedAt: input.postedAt,
+        createdByRoleCode: request.authUser?.roleCode ?? null
+      });
+
+      reply.status(201);
+      return ok(created);
+    }
+  );
+
+  app.post(
+    "/group-fund/history-events",
+    {
+      schema: {
+        tags: ["Group Fund"],
+        summary: "Create non-match group-fund history event",
+        body: toSwaggerSchema(createGroupFundHistoryEventSchema),
+        response: {
+          201: successResponseSchema(groupFundHistoryEventResponseSchema),
+          ...errorResponseSchemas
+        }
+      }
+    },
+    async (request, reply) => {
+      const input = createGroupFundHistoryEventSchema.parse(request.body);
+      const created = await services.groupFund.createNoteEvent({
+        note: input.note,
+        playerId: input.playerId,
+        postedAt: input.postedAt,
+        createdByRoleCode: request.authUser?.roleCode ?? null
       });
 
       reply.status(201);
@@ -186,7 +347,8 @@ export async function registerGroupFundRoutes(app: FastifyInstance, services: Ap
         playerId: input.playerId ?? null,
         amountVnd: input.amountVnd,
         reason: input.reason,
-        postedAt: input.postedAt
+        postedAt: input.postedAt,
+        createdByRoleCode: request.authUser?.roleCode ?? null
       });
 
       reply.status(201);
@@ -210,6 +372,32 @@ export async function registerGroupFundRoutes(app: FastifyInstance, services: Ap
     async (request) => {
       const query = listGroupFundTransactionsQuerySchema.parse(request.query);
       const result = await services.groupFund.listManualTransactions(query);
+
+      return ok(result.items, {
+        page: query.page,
+        pageSize: query.pageSize,
+        total: result.total,
+        totalPages: Math.ceil(result.total / query.pageSize)
+      });
+    }
+  );
+
+  app.get(
+    "/group-fund/history",
+    {
+      schema: {
+        tags: ["Group Fund"],
+        summary: "Get unified group-fund history (matches + advances + manual transactions + notes)",
+        querystring: toSwaggerSchema(groupFundHistoryQuerySchema),
+        response: {
+          200: successResponseSchema(z.array(unifiedGroupFundHistoryItemSchema), paginationMetaSchema),
+          ...errorResponseSchemas
+        }
+      }
+    },
+    async (request) => {
+      const query = groupFundHistoryQuerySchema.parse(request.query);
+      const result = await services.groupFund.getHistory(query);
 
       return ok(result.items, {
         page: query.page,

@@ -5,6 +5,90 @@ import { createRepositories, type RepositoryBundle } from "../../db/repositories
 import type { GroupFundTransactionType } from "../../db/repositories/ledger-repository.js";
 
 type LedgerSourceType = "MANUAL_ADJUSTMENT" | "SYSTEM_CORRECTION";
+type GroupFundHistoryEventType = "GROUP_FUND_ADVANCE" | "GROUP_FUND_NOTE" | "GROUP_FUND_ADJUSTMENT" | "GROUP_FUND_CONTRIBUTION";
+
+interface GroupFundHistoryItem {
+  id: string;
+  module: "GROUP_FUND";
+  itemType: string;
+  postedAt: string;
+  createdAt: string;
+  title: string;
+  description: string | null;
+  amountVnd: number | null;
+  player: {
+    id: string;
+    name: string;
+  } | null;
+  secondaryPlayer: {
+    id: string;
+    name: string;
+  } | null;
+  matchId: string | null;
+  debtPeriodId: string | null;
+  ledgerBatchId: string | null;
+  balanceBeforeVnd: number | null;
+  balanceAfterVnd: number | null;
+  outstandingBeforeVnd: number | null;
+  outstandingAfterVnd: number | null;
+  note: string | null;
+  metadata: unknown;
+}
+
+function toGroupFundHistoryItem(input: {
+  id: string;
+  itemType: string;
+  postedAt: string;
+  createdAt: string;
+  title: string;
+  description: string | null;
+  amountVnd: number | null;
+  playerId: string | null;
+  playerName: string | null;
+  secondaryPlayerId: string | null;
+  secondaryPlayerName: string | null;
+  matchId: string | null;
+  debtPeriodId: string | null;
+  ledgerBatchId: string | null;
+  balanceBeforeVnd: number | null;
+  balanceAfterVnd: number | null;
+  outstandingBeforeVnd: number | null;
+  outstandingAfterVnd: number | null;
+  note: string | null;
+  metadata: unknown;
+}): GroupFundHistoryItem {
+  return {
+    id: input.id,
+    module: "GROUP_FUND",
+    itemType: input.itemType,
+    postedAt: input.postedAt,
+    createdAt: input.createdAt,
+    title: input.title,
+    description: input.description,
+    amountVnd: input.amountVnd,
+    player: input.playerId
+      ? {
+          id: input.playerId,
+          name: input.playerName ?? input.playerId
+        }
+      : null,
+    secondaryPlayer: input.secondaryPlayerId
+      ? {
+          id: input.secondaryPlayerId,
+          name: input.secondaryPlayerName ?? input.secondaryPlayerId
+        }
+      : null,
+    matchId: input.matchId,
+    debtPeriodId: input.debtPeriodId,
+    ledgerBatchId: input.ledgerBatchId,
+    balanceBeforeVnd: input.balanceBeforeVnd,
+    balanceAfterVnd: input.balanceAfterVnd,
+    outstandingBeforeVnd: input.outstandingBeforeVnd,
+    outstandingAfterVnd: input.outstandingAfterVnd,
+    note: input.note,
+    metadata: input.metadata
+  };
+}
 
 export class GroupFundService {
   public constructor(
@@ -14,25 +98,84 @@ export class GroupFundService {
   ) {}
 
   public async getSummary(input: { from?: string; to?: string }) {
-    const summary = await this.repositories.ledgers.getGroupFundSummary(this.groupId, input.from, input.to);
-    const matches = await this.repositories.matches.list({
-      groupId: this.groupId,
-      module: "GROUP_FUND",
-      from: input.from,
-      to: input.to,
-      page: 1,
-      pageSize: 1
-    });
+    const [summary, matches, eventSummary] = await Promise.all([
+      this.repositories.ledgers.getGroupFundSummary(this.groupId, input.from, input.to),
+      this.repositories.matches.list({
+        groupId: this.groupId,
+        module: "GROUP_FUND",
+        from: input.from,
+        to: input.to,
+        page: 1,
+        pageSize: 1
+      }),
+      this.repositories.historyEvents.summarizeGroupFundEvents(this.groupId, input.from, input.to)
+    ]);
+
+    const advancedByPlayerId = new Map(eventSummary.advancesByPlayer.map((item) => [item.playerId, item.totalAdvancedVnd]));
 
     return {
       module: "GROUP_FUND" as const,
       fundBalanceVnd: summary.fundBalanceVnd,
       totalMatches: matches.total,
-      players: summary.players,
+      negativeBalanceAllowed: true,
+      totalRegularContributionsVnd: eventSummary.totalContributionVnd,
+      totalAdvancesVnd: eventSummary.totalAdvanceVnd,
+      advancesByPlayers: eventSummary.advancesByPlayer,
+      players: summary.players.map((player) => ({
+        ...player,
+        totalAdvancedVnd: advancedByPlayerId.get(player.playerId) ?? 0
+      })),
       range: {
         from: input.from ?? null,
         to: input.to ?? null
       }
+    };
+  }
+
+  public async getHistory(input: {
+    playerId?: string;
+    from?: string;
+    to?: string;
+    itemTypes?: string[];
+    page: number;
+    pageSize: number;
+  }) {
+    const result = await this.repositories.historyEvents.listGroupFundHistory({
+      groupId: this.groupId,
+      playerId: input.playerId,
+      from: input.from,
+      to: input.to,
+      itemTypes: input.itemTypes,
+      page: input.page,
+      pageSize: input.pageSize
+    });
+
+    return {
+      items: result.items.map((item) =>
+        toGroupFundHistoryItem({
+          id: item.id,
+          itemType: item.itemType,
+          postedAt: item.postedAt,
+          createdAt: item.createdAt,
+          title: item.title,
+          description: item.description,
+          amountVnd: item.amountVnd,
+          playerId: item.playerId,
+          playerName: item.playerName,
+          secondaryPlayerId: item.secondaryPlayerId,
+          secondaryPlayerName: item.secondaryPlayerName,
+          matchId: item.matchId,
+          debtPeriodId: item.debtPeriodId,
+          ledgerBatchId: item.ledgerBatchId,
+          balanceBeforeVnd: item.balanceBeforeVnd,
+          balanceAfterVnd: item.balanceAfterVnd,
+          outstandingBeforeVnd: item.outstandingBeforeVnd,
+          outstandingAfterVnd: item.outstandingAfterVnd,
+          note: item.note,
+          metadata: item.metadata
+        })
+      ),
+      total: result.total
     };
   }
 
@@ -73,6 +216,7 @@ export class GroupFundService {
     amountVnd: number;
     note?: string | null;
     postedAt?: string;
+    createdByRoleCode?: string | null;
   }) {
     const normalizedNote = input.note?.trim() ?? "";
     const reason = normalizedNote.length > 0 ? normalizedNote : "Marked player paid into group fund";
@@ -82,7 +226,9 @@ export class GroupFundService {
       playerId: input.playerId,
       amountVnd: input.amountVnd,
       reason,
-      postedAt: input.postedAt
+      postedAt: input.postedAt,
+      historyEventType: "GROUP_FUND_CONTRIBUTION",
+      createdByRoleCode: input.createdByRoleCode ?? null
     });
 
     return {
@@ -95,12 +241,215 @@ export class GroupFundService {
     };
   }
 
+  public async createAdvance(input: {
+    playerId: string;
+    amountVnd: number;
+    note?: string | null;
+    postedAt?: string;
+    createdByRoleCode?: string | null;
+  }) {
+    if (!Number.isInteger(input.amountVnd) || input.amountVnd <= 0) {
+      throw badRequest("GROUP_FUND_ADVANCE_INVALID", "amountVnd must be a positive integer");
+    }
+
+    const postedAt = input.postedAt ?? new Date().toISOString();
+    const normalizedNote = input.note?.trim() ?? null;
+
+    return withTransaction(this.pool, async (tx) => {
+      const txRepositories = createRepositories(tx);
+      const activePlayers = await txRepositories.players.findActiveByIds(this.groupId, [input.playerId]);
+      if (activePlayers.length !== 1) {
+        throw unprocessable("GROUP_FUND_ADVANCE_INVALID", "playerId must be an active member of the current group");
+      }
+
+      const player = activePlayers[0]!;
+      const [fundAccount, playerAccount, balanceBeforeVnd] = await Promise.all([
+        txRepositories.accounts.getOrCreateFundAccount(this.groupId),
+        txRepositories.accounts.getOrCreatePlayerAccount(this.groupId, input.playerId, "GROUP_FUND"),
+        txRepositories.ledgers.getGroupFundBalance(this.groupId)
+      ]);
+
+      const reason = normalizedNote ?? `Fund advanced by ${player.displayName}`;
+      const batch = await txRepositories.ledgers.createBatch({
+        groupId: this.groupId,
+        module: "GROUP_FUND",
+        sourceType: "MANUAL_ADJUSTMENT",
+        matchId: null,
+        description: `Advance: ${reason}`,
+        referenceCode: null,
+        postedAt
+      });
+
+      await txRepositories.ledgers.insertEntries(batch.id, [], [
+        {
+          sourceAccountId: playerAccount.accountId,
+          destinationAccountId: fundAccount.accountId,
+          amountVnd: input.amountVnd,
+          reasonText: reason,
+          lineNo: 1
+        }
+      ]);
+
+      const historyEvent = await txRepositories.historyEvents.createEvent({
+        groupId: this.groupId,
+        module: "GROUP_FUND",
+        eventType: "GROUP_FUND_ADVANCE",
+        postedAt,
+        note: normalizedNote,
+        amountVnd: input.amountVnd,
+        matchStakesImpactMode: null,
+        affectsDebt: false,
+        playerId: player.id,
+        secondaryPlayerId: null,
+        debtPeriodId: null,
+        matchId: null,
+        ledgerBatchId: batch.id,
+        balanceBeforeVnd,
+        balanceAfterVnd: balanceBeforeVnd + input.amountVnd,
+        outstandingBeforeVnd: null,
+        outstandingAfterVnd: null,
+        metadataJson: {
+          transactionType: "ADVANCE",
+          sourceType: "MANUAL_ADJUSTMENT"
+        },
+        createdByRoleCode: input.createdByRoleCode ?? null
+      });
+
+      await txRepositories.audits.insert({
+        groupId: this.groupId,
+        entityType: "GROUP_FUND_ADVANCE",
+        entityId: historyEvent.id,
+        actionType: "CREATE",
+        after: {
+          playerId: player.id,
+          amountVnd: input.amountVnd,
+          postedAt,
+          ledgerBatchId: batch.id
+        }
+      });
+
+      return {
+        batchId: batch.id,
+        event: toGroupFundHistoryItem({
+          id: historyEvent.id,
+          itemType: "ADVANCE",
+          postedAt: historyEvent.postedAt,
+          createdAt: historyEvent.createdAt,
+          title: `Fund advanced by ${player.displayName}`,
+          description: historyEvent.note,
+          amountVnd: historyEvent.amountVnd,
+          playerId: historyEvent.playerId,
+          playerName: player.displayName,
+          secondaryPlayerId: historyEvent.secondaryPlayerId,
+          secondaryPlayerName: null,
+          matchId: historyEvent.matchId,
+          debtPeriodId: historyEvent.debtPeriodId,
+          ledgerBatchId: historyEvent.ledgerBatchId,
+          balanceBeforeVnd: historyEvent.balanceBeforeVnd,
+          balanceAfterVnd: historyEvent.balanceAfterVnd,
+          outstandingBeforeVnd: historyEvent.outstandingBeforeVnd,
+          outstandingAfterVnd: historyEvent.outstandingAfterVnd,
+          note: historyEvent.note,
+          metadata: historyEvent.metadataJson
+        })
+      };
+    });
+  }
+
+  public async createNoteEvent(input: {
+    note: string;
+    postedAt?: string;
+    playerId?: string;
+    createdByRoleCode?: string | null;
+  }) {
+    const normalizedNote = input.note.trim();
+    if (normalizedNote.length === 0) {
+      throw badRequest("GROUP_FUND_HISTORY_EVENT_INVALID", "note is required");
+    }
+
+    const postedAt = input.postedAt ?? new Date().toISOString();
+
+    return withTransaction(this.pool, async (tx) => {
+      const txRepositories = createRepositories(tx);
+      let playerName: string | null = null;
+
+      if (input.playerId) {
+        const activePlayers = await txRepositories.players.findActiveByIds(this.groupId, [input.playerId]);
+        if (activePlayers.length !== 1) {
+          throw unprocessable("GROUP_FUND_HISTORY_EVENT_INVALID", "playerId must be an active member of the current group");
+        }
+        playerName = activePlayers[0]!.displayName;
+      }
+
+      const historyEvent = await txRepositories.historyEvents.createEvent({
+        groupId: this.groupId,
+        module: "GROUP_FUND",
+        eventType: "GROUP_FUND_NOTE",
+        postedAt,
+        note: normalizedNote,
+        amountVnd: null,
+        matchStakesImpactMode: null,
+        affectsDebt: false,
+        playerId: input.playerId ?? null,
+        secondaryPlayerId: null,
+        debtPeriodId: null,
+        matchId: null,
+        ledgerBatchId: null,
+        balanceBeforeVnd: null,
+        balanceAfterVnd: null,
+        outstandingBeforeVnd: null,
+        outstandingAfterVnd: null,
+        metadataJson: {},
+        createdByRoleCode: input.createdByRoleCode ?? null
+      });
+
+      await txRepositories.audits.insert({
+        groupId: this.groupId,
+        entityType: "GROUP_FUND_HISTORY_EVENT",
+        entityId: historyEvent.id,
+        actionType: "CREATE",
+        after: {
+          eventType: historyEvent.eventType,
+          playerId: historyEvent.playerId,
+          note: historyEvent.note
+        }
+      });
+
+      return {
+        event: toGroupFundHistoryItem({
+          id: historyEvent.id,
+          itemType: "NOTE",
+          postedAt: historyEvent.postedAt,
+          createdAt: historyEvent.createdAt,
+          title: "Fund note",
+          description: historyEvent.note,
+          amountVnd: null,
+          playerId: historyEvent.playerId,
+          playerName,
+          secondaryPlayerId: null,
+          secondaryPlayerName: null,
+          matchId: null,
+          debtPeriodId: null,
+          ledgerBatchId: null,
+          balanceBeforeVnd: null,
+          balanceAfterVnd: null,
+          outstandingBeforeVnd: null,
+          outstandingAfterVnd: null,
+          note: historyEvent.note,
+          metadata: historyEvent.metadataJson
+        })
+      };
+    });
+  }
+
   public async createManualTransaction(input: {
     transactionType: GroupFundTransactionType;
     playerId?: string | null;
     amountVnd: number;
     reason: string;
     postedAt?: string;
+    historyEventType?: GroupFundHistoryEventType | null;
+    createdByRoleCode?: string | null;
   }) {
     const needsPlayer = input.transactionType === "CONTRIBUTION" || input.transactionType === "WITHDRAWAL";
     const playerId = input.playerId ?? null;
@@ -128,7 +477,10 @@ export class GroupFundService {
         playerName = activePlayers[0]!.displayName;
       }
 
-      const fundAccount = await txRepositories.accounts.getOrCreateFundAccount(this.groupId);
+      const [fundAccount, balanceBeforeVnd] = await Promise.all([
+        txRepositories.accounts.getOrCreateFundAccount(this.groupId),
+        txRepositories.ledgers.getGroupFundBalance(this.groupId)
+      ]);
 
       let sourceAccountId: string;
       let destinationAccountId: string;
@@ -185,6 +537,42 @@ export class GroupFundService {
         }
       ]);
 
+      const fundDeltaVnd = destinationAccountId === fundAccount.accountId ? input.amountVnd : -input.amountVnd;
+      const historyEventType: GroupFundHistoryEventType | null =
+        input.historyEventType ??
+        (input.transactionType === "ADJUSTMENT_IN" || input.transactionType === "ADJUSTMENT_OUT"
+          ? "GROUP_FUND_ADJUSTMENT"
+          : null);
+
+      let historyEventId: string | null = null;
+      if (historyEventType) {
+        const historyEvent = await txRepositories.historyEvents.createEvent({
+          groupId: this.groupId,
+          module: "GROUP_FUND",
+          eventType: historyEventType,
+          postedAt,
+          note: reason,
+          amountVnd: input.amountVnd,
+          matchStakesImpactMode: null,
+          affectsDebt: false,
+          playerId,
+          secondaryPlayerId: null,
+          debtPeriodId: null,
+          matchId: null,
+          ledgerBatchId: batch.id,
+          balanceBeforeVnd,
+          balanceAfterVnd: balanceBeforeVnd + fundDeltaVnd,
+          outstandingBeforeVnd: null,
+          outstandingAfterVnd: null,
+          metadataJson: {
+            transactionType: input.transactionType,
+            sourceType
+          },
+          createdByRoleCode: input.createdByRoleCode ?? null
+        });
+        historyEventId = historyEvent.id;
+      }
+
       await txRepositories.audits.insert({
         groupId: this.groupId,
         entityType: "GROUP_FUND_TRANSACTION",
@@ -196,7 +584,9 @@ export class GroupFundService {
           amountVnd: input.amountVnd,
           reason,
           postedAt,
-          sourceType
+          sourceType,
+          historyEventType,
+          historyEventId
         }
       });
 

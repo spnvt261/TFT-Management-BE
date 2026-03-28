@@ -395,6 +395,36 @@ export class LedgerRepository {
     };
   }
 
+  public async getGroupFundBalance(groupId: string, upToPostedAt?: string): Promise<number> {
+    const params: unknown[] = [groupId];
+    const conditions: string[] = ["b.group_id = $1", "b.module = 'GROUP_FUND'"];
+
+    if (upToPostedAt) {
+      params.push(upToPostedAt);
+      conditions.push(`b.posted_at <= $${params.length}`);
+    }
+
+    const result = await this.db.query<{ fund_balance_vnd: number }>(
+      `
+      SELECT COALESCE(SUM(
+        CASE
+          WHEN da.account_type = 'FUND_MAIN' THEN e.amount_vnd
+          WHEN sa.account_type = 'FUND_MAIN' THEN -e.amount_vnd
+          ELSE 0
+        END
+      ), 0)::bigint AS fund_balance_vnd
+      FROM ledger_entries e
+      INNER JOIN ledger_entry_batches b ON b.id = e.batch_id
+      INNER JOIN ledger_accounts sa ON sa.id = e.source_account_id
+      INNER JOIN ledger_accounts da ON da.id = e.destination_account_id
+      WHERE ${conditions.join(" AND ")}
+      `,
+      params
+    );
+
+    return result.rows[0]?.fund_balance_vnd ?? 0;
+  }
+
   public async listManualGroupFundTransactions(input: {
     groupId: string;
     transactionType?: GroupFundTransactionType;

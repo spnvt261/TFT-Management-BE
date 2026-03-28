@@ -10,6 +10,7 @@ import { AuditRepository } from "./audit-repository.js";
 import { AccountRepository } from "./account-repository.js";
 import { MatchStakesDebtRepository } from "./match-stakes-debt-repository.js";
 import { RoleRepository } from "./role-repository.js";
+import { HistoryEventRepository } from "./history-event-repository.js";
 
 export function createRepositories(db: Queryable) {
   return {
@@ -23,7 +24,8 @@ export function createRepositories(db: Queryable) {
     presets: new PresetRepository(db),
     audits: new AuditRepository(db),
     accounts: new AccountRepository(db),
-    matchStakesDebt: new MatchStakesDebtRepository(db)
+    matchStakesDebt: new MatchStakesDebtRepository(db),
+    historyEvents: new HistoryEventRepository(db)
   };
 }
 

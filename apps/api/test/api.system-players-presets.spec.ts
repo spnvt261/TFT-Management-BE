@@ -54,7 +54,7 @@ describe("API - health, players, presets", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.headers["access-control-allow-origin"]).toBe("*");
+    expect(response.headers["access-control-allow-origin"]).toBe("http://localhost:5173");
   });
 
   it("supports player CRUD flow", async () => {

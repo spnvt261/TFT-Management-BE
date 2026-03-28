@@ -20,6 +20,8 @@ This project uses Flyway as the only schema source of truth.
 - `V6__add_rule_set_version_description.sql`
 - `V7__add_match_stakes_debt_periods.sql`
 - `V8__add_match_stakes_carry_forward_and_period_match_no.sql`
+- `V9__add_roles_table.sql`
+- `V10__add_module_history_events.sql`
 
 ## Operational Notes
 
